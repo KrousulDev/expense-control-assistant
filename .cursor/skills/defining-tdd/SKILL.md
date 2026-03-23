@@ -27,19 +27,54 @@ Los tests deben nombrar o comentar ese escenario para que en el código base se 
 1. **Aclarar casos de uso** — Lista breve de escenarios + entradas + salidas esperadas.
 2. **Tests primero** — Un archivo de test por módulo/feature o bloque coherente; `describe`/`it` (o equivalente) por caso de uso.
 3. **Implementación mínima** — Solo lo necesario para que pasen los tests.
-4. **Verificación** — `npm run test` (y `npm run lint` si tocó código).
+4. **Verificación** — `npm run test` en la raíz (todos los workspaces con test) y `npm run lint` si se tocó código; ver sección [Verificación y scripts](#verificación-y-scripts).
 
 Refactor solo con la barra verde (tests pasando).
 
-## Dónde ubicar tests (cuando exista el código)
+## Rol de los tests en este proyecto
 
-| Capa | Convención típica |
-|------|-------------------|
-| **API (NestJS)** | Junto al módulo: `*.spec.ts` al lado del servicio/controlador, o carpeta `__tests__` cercana |
-| **App (React/Vite)** | Componentes/hooks: `*.test.tsx` / `*.spec.ts` junto al archivo o en `__tests__` |
-| **Dominio / parsers / AI** | Tests unitarios cerca de la unidad probada; mocks de IO externo |
+Los tests son el **contrato ejecutable** del comportamiento acordado en los casos de uso: documentan la intención, evitan regresiones al refactorizar y dan feedback rápido sin levantar toda la app. No sustituyen revisión manual ni pruebas de integración end-to-end donde aplique, pero son la base del ciclo red-green-refactor en código nuevo o al corregir bugs.
 
-Si la estructura del repo ya define otra convención, **seguir la existente**.
+## Dónde están y cómo se nombran (monorepo npm workspaces)
+
+El repositorio tiene workspaces `app`, `api` y `ai`. Cada uno define su propio `test` en su `package.json`; la raíz ejecuta todos los que existan.
+
+| Workspace | Herramienta | Ubicación y patrón de archivos |
+|-----------|-------------|--------------------------------|
+| **`api/`** (NestJS) | Jest (`ts-jest`) | Unitarios en `api/src/**/*.spec.ts` (convención Nest: junto al código). Config Jest en `api/package.json` (`testRegex`: `.*\.spec\.ts$`, `rootDir`: `src`). E2E: `api/test/**/*.e2e-spec.ts` con `npm run test:e2e -w api` (config `api/test/jest-e2e.json`). |
+| **`app/`** (React + Vite) | Vitest + jsdom | Archivos `*.test.*` / `*.spec.*` bajo `app/src/` (p. ej. `App.test.tsx`). Setup global: `app/src/test/setup.ts`; opciones en `app/vite.config.ts` (`test.environment`, `setupFiles`). Testing Library para componentes. |
+| **`ai/`** (lógica / prompts) | Vitest (entorno Node) | `ai/src/**/*.spec.ts` y `ai/src/**/*.test.ts` (ver `ai/vitest.config.ts`). Imports ESM coherentes con el paquete (`type: module`). |
+
+**`db/`** no define tests en el workspace actual; tipos y migraciones se validan con el flujo de Supabase / BD según corresponda.
+
+## Cómo se implementan (por capa)
+
+- **API:** `@nestjs/testing` (`Test.createTestingModule`, inyección real de providers/mocks). Supertest suele usarse en e2e HTTP cuando existan esos tests.
+- **App:** `vitest` + `@testing-library/react` (y `@testing-library/jest-dom` vía setup) para renderizar y aserciones orientadas al usuario (`getByRole`, etc.).
+- **AI:** tests unitarios puros en Node (sin navegador); `describe` / `it` / `expect` importados de `vitest` salvo que se active `globals` en config.
+
+Mantener **un comportamiento verificable por test** y mocks solo en fronteras externas (HTTP, OpenAI, Twilio, Supabase), no para “tapar” la lógica que quieres garantizar.
+
+## Verificación y scripts
+
+| Objetivo | Comando (desde la raíz del repo) |
+|----------|----------------------------------|
+| **Suite completa del monorepo** | `npm run test` — ejecuta `test` en cada workspace con script (`--workspaces --if-present`). |
+| **Solo un paquete** | `npm run test -w app`, `npm run test -w api`, `npm run test -w ai`. |
+| **Modo watch (desarrollo)** | `npm run test:watch -w app` / `npm run test:watch -w api` / `npm run test:watch -w ai`. |
+| **Cobertura** | `npm run test:cov -w app` o `npm run test:cov -w api` (cuando haga falta medir cobertura). |
+| **E2E API** | `npm run test:e2e -w api` (archivos `*.e2e-spec.ts` en `api/test/`). |
+| **Calidad tras cambios** | `npm run lint` (todos los workspaces con lint) además de tests. |
+
+Flujo mínimo tras tocar código: **`npm run test`** y, si aplica, **`npm run lint`**. Si falla un test, corregir implementación o actualizar el test solo si el requisito de negocio cambió (no debilitar aserciones para “hacer pasar”).
+
+## Convención si aún no hay carpeta de tests en un módulo nuevo
+
+| Capa | Convención en este repo |
+|------|-------------------------|
+| **API** | `*.spec.ts` en `api/src/` junto al servicio/controlador (o subcarpeta del feature). |
+| **App** | `*.test.tsx` / `*.test.ts` junto al componente o hook. |
+| **AI** | `*.spec.ts` en `ai/src/` junto al módulo probado. |
 
 ## Cómo escribir el test para que el caso de uso quede claro
 
@@ -47,11 +82,6 @@ Si la estructura del repo ya define otra convención, **seguir la existente**.
 - Título en lenguaje de negocio: qué hace el sistema, no solo nombres de métodos.
 - **Arrange / Act / Assert** implícito o comentado solo donde aporte claridad.
 - Para flujos conversacionales: incluir al menos un ejemplo realista de mensaje y el objeto o respuesta esperada (estructura mínima verificable).
-
-## Verificación
-
-- Tras cambios: `npm run test` desde la raíz del monorepo (o el paquete que tocaste, si el repo define workspaces).
-- Si un test falla, no “arreglar” silenciando el assert: corregir implementación o el propio test si el requisito cambió.
 
 ## Bugs
 
