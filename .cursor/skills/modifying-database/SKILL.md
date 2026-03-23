@@ -16,7 +16,7 @@ El directorio de proyecto Supabase **no es la raíz del monorepo**: está en `db
 1. **Crear el archivo de migración** (nombre descriptivo en snake_case):
 
    ```bash
-   supabase migration new nombre_migracion --workdir db
+   supabase migration new nombre_migracion --workdir db --yes
    ```
 
    Se genera un `.sql` nuevo bajo `db/supabase/migrations/` con prefijo de timestamp.
@@ -53,7 +53,7 @@ supabase db reset --workdir db
 
 | Objetivo | Comando (desde raíz con `--workdir db`) |
 |----------|----------------------------------------|
-| Nueva migración vacía | `supabase migration new nombre_migracion` |
+| Nueva migración vacía (no interactivo) | `supabase migration new nombre_migracion --yes` |
 | Aplicar pendientes (local) | `supabase migration up` |
 | Reset local + migraciones + seed | `supabase db reset` |
 | Subir migraciones al proyecto remoto (cuando toque) | `supabase db push` (requiere login/proyecto enlazado) |
@@ -61,5 +61,6 @@ supabase db reset --workdir db
 ## Buenas prácticas
 
 - Nombres de migración claros (`add_expenses_table`, no `update`).
+- Para evitar prompts bloqueantes en automatización/agentes, usar `--yes` en comandos que puedan pedir confirmación.
 - No editar migraciones ya aplicadas en entornos compartidos; añadir una nueva migración para corregir.
 - Tras cambios de esquema usados en código, ejecutar `npm run supabase:gen` y ajustar tipos/importaciones.

@@ -9,7 +9,7 @@ description: Inspección read-only del esquema y datos vía MCP de Supabase loca
 
 Este flujo es **solo lectura respecto al estado de PostgreSQL**: sirve para **debugging**, **documentar o entender el esquema**, y **consultar datos de forma puntual**.
 
-**No modificar la base de datos por MCP.** Cualquier cambio de esquema o de datos persistentes debe hacerse con el flujo de migraciones del repo (skill `modifying-database`: `supabase migration new`, editar SQL en `db/supabase/migrations/`, `supabase migration up`).
+**No modificar la base de datos por MCP.** Cualquier cambio de esquema o de datos persistentes debe hacerse con el flujo de migraciones del repo (skill `modifying-database`: `supabase migration new nombre_migracion --yes`, editar SQL en `db/supabase/migrations/`, `supabase migration up`).
 
 En concreto, con este skill **no** se debe:
 
