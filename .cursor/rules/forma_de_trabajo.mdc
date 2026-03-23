@@ -1,0 +1,93 @@
+---
+alwaysApply: true
+---
+
+# Onboarding
+- **Proyecto:** WebApp de Control de Gastos con Entrada Conversacional (WhatsApp + Dashboard Web).
+- **Objetivo:** Permitir a los usuarios registrar gastos e ingresos mediante lenguaje natural (WhatsApp) y visualizar/analizar su estado financiero en una web app con asistencia de AI.
+- **Stack:**
+  - Frontend: ReactJS (Vite) + Tailwind
+  - Backend: Node.js (NestJS)
+  - Base de datos: Supabase (PostgreSQL)
+  - Integraciones: WhatsApp (Twilio), OpenAI (NLP)
+- **Gestor de Paquetes:** npm
+- **Estructura:**
+  - `/app`: Frontend (dashboard financiero)
+  - `/api`: Backend (webhooks, lógica de negocio, integración AI)
+  - `/ai`: Prompts y lógica de interpretación
+  - `/db`: Esquemas y migraciones
+
+# Comandos Críticos
+- **Setup:** `npm install`
+- **Dev:** `npm run dev`
+- **Test:** `npm run test`
+- **DB:** `npm run supabase:gen`
+- **Lint:** `npm run lint`
+
+# Reglas de Agente
+
+1. **Contexto del dominio:**
+   - La app es financial + conversational AI
+   - Priorizar interpretación correcta sobre complejidad técnica
+   - Considerar ambigüedad en lenguaje natural
+
+2. **Tool & Skill Discovery:**
+   - Revisar lógica existente antes de implementar
+   - Reutilizar servicios de parsing, categorización y respuestas
+   - Si existe una Skill específica para la tarea (ej. generar migraciones, refactorizar), úsala prioritariamente para asegurar consistencia.
+
+3. **Verificación Delegada:**
+   - Crea un test de reproducción antes de arreglar bugs complejos.
+
+4. **Estilo:**
+   -  Si el linter falla, corrígelo. No inventes reglas de estilo, sigue la config existente.
+   - Seguir estructura modular (NestJS)
+   - Evitar duplicación de lógica
+   - Código claro y explícito
+
+# Flujo de Implementación
+
+El flujo obligatorio de trabajo para cualquier implementación debe ser:
+
+1. **Diseño y aclaración de casos de uso**
+   - Entiende primero el escenario para que te permita crear los casos de prueba.
+   - Definir inputs reales (ej: “gasté 20k en comida”)
+   - Determinar intención, datos esperados y respuesta
+
+2. **Planeación**
+   - Haz el diseño para cumplir con esos casos de prueba
+   - Definir endpoints, servicios y estructuras de datos
+
+3. **Implementación**
+   - Entendiendo los casos de prueba y el plan, implementa lo acordado.
+   - Controller
+   - Service
+   - AI layer
+   - Persistencia
+
+4. **Verificación**
+   - Corriendo los tests unitarios que se diseñaron bajo la metodologia TDD.
+
+# Principios de Implementación
+
+1. **DRY**
+   - No repitas código; abstrae lógica reutilizable.
+   - Centralizar parsing
+   - No duplicar prompts
+
+2. **Simplicidad primero**
+   - Evita la sobre-ingeniería. La solución más simple suele ser la correcta.
+   - Monolito modular
+   - Evitar sobreingeniería
+
+3. **TDD Pragmatico:** 
+   - Escribe los tests (o al menos define los casos de prueba) antes de escribir la implementación.
+
+4. **AI-first design**
+   - Diseñar prompts cuidadosamente
+   - Evitar reglas rígidas innecesarias
+
+
+# Debugging
+
+  - Cuando se reporte un bug, no empieces a intentar arreglarlo inmediatamente. En su lugar crea un test que reproduzca el bug, y entonces intenta arreglarlo.
