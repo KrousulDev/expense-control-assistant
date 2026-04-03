@@ -16,6 +16,14 @@ node_modules/
 
 # Environment files
 /.env
+/api/.env   /app/.env
+/app/.env
+/ai/.env
+/db/.env
+/db/supabase/.env
+/db/supabase/.env.local
+/db/supabase/.env.local.example
+/db/supabase/.env.local.example
 
 # Angular CLI and build artefacts
 /.angular-cli.json

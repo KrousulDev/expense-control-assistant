@@ -1,7 +1,2 @@
-/**
- * Prompts, plantillas y lógica pura de interpretación (sin I/O).
- * La API consumirá funciones exportadas desde aquí.
- */
-export function placeholder(): string {
-  return 'ai'
-}
+export { interpret } from './interpret'
+export type { InterpretInput, InterpretResult } from './types'

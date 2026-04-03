@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { placeholder } from './index.js'
+import { interpret } from './index'
 
-describe('ai (dominio)', () => {
-  it('expone un punto de entrada para tests unitarios', () => {
-    expect(placeholder()).toBe('ai')
+describe('ai (exports)', () => {
+  it('exporta la función interpret', () => {
+    expect(typeof interpret).toBe('function')
   })
 })
