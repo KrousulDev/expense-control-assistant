@@ -20,7 +20,6 @@ alwaysApply: true
 # Comandos Críticos
 - **Setup:** `npm install`
 - **Dev:** `npm run dev`
-- **Test:** `npm run test`
 - **DB:** `npm run supabase:gen`
 - **Lint:** `npm run lint`
 
@@ -37,10 +36,12 @@ alwaysApply: true
    - Si existe una Skill específica para la tarea (ej. generar migraciones, refactorizar), úsala prioritariamente para asegurar consistencia.
 
 3. **Verificación Delegada:**
-   - Crea un test de reproducción antes de arreglar bugs complejos.
+   - Al terminar una implementación o corrección, delega la verificación al subagente `qa-engineer`. No corras tests directamente.
+   - Ante bugs complejos, define primero el caso de prueba que los reproduzca y pásaselo al `qa-engineer`.
+   - Invoca al subagente `qa-engineer` (ej: "Usa el subagente qa-engineer para verificar estos casos de prueba: 1. ..., 2. ...") pasándole EXPLÍCITAMENTE los casos de prueba específicos que aplican al feature implementado. Evita pedir que pruebe cosas innecesarias o flujos completos si no aplican. ESPERA su reporte detallado antes de dar la tarea por finalizada
 
 4. **Estilo:**
-   -  Si el linter falla, corrígelo. No inventes reglas de estilo, sigue la config existente.
+   - Si el linter falla, corrígelo. No inventes reglas de estilo, sigue la config existente.
    - Seguir estructura modular (NestJS)
    - Evitar duplicación de lógica
    - Código claro y explícito
@@ -50,13 +51,13 @@ alwaysApply: true
 El flujo obligatorio de trabajo para cualquier implementación debe ser:
 
 1. **Diseño y aclaración de casos de uso**
-   - Entiende primero el escenario para que te permita crear los casos de prueba.
-   - Definir inputs reales (ej: “gasté 20k en comida”)
+   - Entiende primero el escenario para que te permita definir los casos de prueba.
+   - Definir inputs reales (ej: "gasté 20k en comida")
    - Determinar intención, datos esperados y respuesta
 
 2. **Planeación**
-   - Haz el diseño para cumplir con esos casos de prueba
-   - Definir endpoints, servicios y estructuras de datos
+   - Diseña la solución para cumplir con esos casos de prueba.
+   - Definir endpoints, servicios y estructuras de datos.
 
 3. **Implementación**
    - Entendiendo los casos de prueba y el plan, implementa lo acordado.
@@ -66,7 +67,8 @@ El flujo obligatorio de trabajo para cualquier implementación debe ser:
    - Persistencia
 
 4. **Verificación**
-   - Corriendo los tests unitarios que se diseñaron bajo la metodologia TDD.
+   - Al terminar, delega al subagente `qa-engineer` para que corra los tests y entregue el reporte.
+   - No corras tests manualmente; es responsabilidad exclusiva del `qa-engineer`.
 
 # Principios de Implementación
 
@@ -80,14 +82,15 @@ El flujo obligatorio de trabajo para cualquier implementación debe ser:
    - Monolito modular
    - Evitar sobreingeniería
 
-3. **TDD Pragmatico:** 
-   - Escribe los tests (o al menos define los casos de prueba) antes de escribir la implementación.
+3. **Diseño orientado a casos de prueba:**
+   - Define los casos de prueba antes de implementar; la ejecución es responsabilidad del `qa-engineer`.
 
 4. **AI-first design**
    - Diseñar prompts cuidadosamente
    - Evitar reglas rígidas innecesarias
 
-
 # Debugging
 
-  - Cuando se reporte un bug, no empieces a intentar arreglarlo inmediatamente. En su lugar crea un test que reproduzca el bug, y entonces intenta arreglarlo.
+- Cuando se reporte un bug, no empieces a intentar arreglarlo inmediatamente.
+- Define primero el caso de prueba que reproduzca el bug y delégalo al subagente `qa-engineer`.
+- Una vez confirmado el caso fallido, implementa la corrección.

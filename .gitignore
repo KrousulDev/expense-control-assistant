@@ -16,7 +16,7 @@ node_modules/
 
 # Environment files
 /.env
-/api/.env   /app/.env
+/api/.env
 /app/.env
 /ai/.env
 /db/.env
