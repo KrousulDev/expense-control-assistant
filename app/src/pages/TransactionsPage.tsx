@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import type { Database } from '../../../db/generated/database.types'
+import { TransactionModal } from '../components/TransactionModal'
+import { DeleteConfirmDialog } from '../components/DeleteConfirmDialog'
 
 type Transaction = Database['public']['Tables']['transactions']['Row']
 type Category = Database['public']['Tables']['categories']['Row']
@@ -11,50 +13,56 @@ export function TransactionsPage() {
   const [transactions, setTransactions] = useState<
     (Transaction & { category_name?: string })[]
   >([])
+  const [categories, setCategories] = useState<Category[]>([])
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(0)
   const [hasMore, setHasMore] = useState(true)
   const [typeFilter, setTypeFilter] = useState<'all' | 'expense' | 'income'>(
     'all',
   )
+  const [editingTx, setEditingTx] = useState<
+    (Transaction & { category_name?: string }) | null
+  >(null)
+  const [deletingTx, setDeletingTx] = useState<Transaction | null>(null)
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
+  const load = useCallback(async () => {
+    setLoading(true)
 
-      let query = supabase
-        .from('transactions')
-        .select('*')
-        .order('occurred_at', { ascending: false })
-        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+    let query = supabase
+      .from('transactions')
+      .select('*')
+      .order('occurred_at', { ascending: false })
+      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
 
-      if (typeFilter !== 'all') {
-        query = query.eq('type', typeFilter)
-      }
-
-      const [txResult, catResult] = await Promise.all([
-        query,
-        supabase.from('categories').select('id, name'),
-      ])
-
-      const rows = txResult.data ?? []
-      const categories = (catResult.data ?? []) as Category[]
-      const catMap = new Map(categories.map((c) => [c.id, c.name]))
-
-      setTransactions(
-        rows.map((t) => ({
-          ...t,
-          category_name: t.category_id
-            ? (catMap.get(t.category_id) ?? '—')
-            : '—',
-        })),
-      )
-      setHasMore(rows.length === PAGE_SIZE)
-      setLoading(false)
+    if (typeFilter !== 'all') {
+      query = query.eq('type', typeFilter)
     }
 
-    void load()
+    const [txResult, catResult] = await Promise.all([
+      query,
+      supabase.from('categories').select('id, name'),
+    ])
+
+    const rows = txResult.data ?? []
+    const cats = (catResult.data ?? []) as Category[]
+    const catMap = new Map(cats.map((c) => [c.id, c.name]))
+
+    setCategories(cats)
+    setTransactions(
+      rows.map((t) => ({
+        ...t,
+        category_name: t.category_id
+          ? (catMap.get(t.category_id) ?? '—')
+          : '—',
+      })),
+    )
+    setHasMore(rows.length === PAGE_SIZE)
+    setLoading(false)
   }, [page, typeFilter])
+
+  useEffect(() => {
+    void load()
+  }, [load])
 
   const fmt = (n: number) =>
     n.toLocaleString('es-MX', {
@@ -108,6 +116,7 @@ export function TransactionsPage() {
                   <th className="px-4 py-3 font-medium">Categoría</th>
                   <th className="px-4 py-3 font-medium">Canal</th>
                   <th className="px-4 py-3 font-medium text-right">Monto</th>
+                  <th className="px-4 py-3 font-medium">Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -138,6 +147,30 @@ export function TransactionsPage() {
                       {tx.type === 'expense' ? '-' : '+'}$
                       {fmt(Number(tx.amount))}
                     </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setEditingTx(tx)}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+                          aria-label="Editar"
+                          title="Editar"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={() => setDeletingTx(tx)}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                          aria-label="Eliminar"
+                          title="Eliminar"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -162,6 +195,29 @@ export function TransactionsPage() {
             </button>
           </div>
         </>
+      )}
+
+      {editingTx && (
+        <TransactionModal
+          transaction={editingTx}
+          categories={categories}
+          onClose={() => setEditingTx(null)}
+          onSaved={() => {
+            setEditingTx(null)
+            void load()
+          }}
+        />
+      )}
+
+      {deletingTx && (
+        <DeleteConfirmDialog
+          transaction={deletingTx}
+          onClose={() => setDeletingTx(null)}
+          onDeleted={() => {
+            setDeletingTx(null)
+            void load()
+          }}
+        />
       )}
     </div>
   )
