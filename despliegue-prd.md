@@ -1,6 +1,44 @@
 # Despliegue en Producción — Expense Control Assistant
 
 Servidor: `192.168.1.212` (Ubuntu) | Usuario SSH: `deploy`
+Última actualización: 2026-04-07
+
+---
+
+## Changelog de arquitectura
+
+| Fecha | Cambio |
+|---|---|
+| 2026-04-07 | Nginx unificado: server block único escucha en `:80` y `:3000` (antes dos bloques separados) |
+| 2026-04-07 | `expense_network` agregada como red externa al `docker-compose.yml` de 10x-builders |
+| 2026-04-07 | `context/nginx.conf` centraliza todas las rutas (10x-builders + expense-control) |
+| 2026-04-07 | `GET /health` agregado al NestJS API para Docker healthcheck |
+| 2026-04-07 | `BrowserRouter` con `basename` en React app para soporte de sub-ruta `/expense/` |
+| 2026-04-07 | `Cache-Control: no-cache` en `/expense/` + `immutable` en `/expense/assets/` |
+| 2026-04-07 | `VITE_API_URL` cambiado a relativa (`/expense-api`) para compatibilidad LAN + ngrok |
+
+---
+
+## Features implementadas (2026-04-07)
+
+### 1. Endpoint `GET /health` en NestJS API
+- **Archivo:** `api/src/app.controller.ts`
+- **Motivo:** Docker healthcheck requería un endpoint que retorne 200. Sin esto, el contenedor quedaba en estado `unhealthy`.
+- **Respuesta:** `{ "status": "ok" }`
+
+### 2. React Router `basename` para sub-ruta `/expense/`
+- **Archivos:** `app/src/App.tsx`, `app/src/lib/apiClient.ts`
+- **Motivo:** La SPA se sirve bajo `/expense/`, no en raíz. Sin `basename`, React Router no matcheaba ninguna ruta y la pantalla quedaba en blanco.
+- **Detalle:** Se usa `import.meta.env.BASE_URL.replace(/\/$/, '') || '/'` para remover el trailing slash que requiere React Router v6.
+
+### 3. Cache-busting automático del frontend
+- **Archivo:** `context/nginx.conf` — `location /expense/`
+- **Motivo:** Tras deploys, el browser cacheaba `index.html` viejo que apuntaba a assets con hashes obsoletos, causando pantalla en blanco sin hard-refresh.
+- **Solución:** `index.html` → `Cache-Control: no-cache` / Assets → `Cache-Control: immutable`
+
+### 4. Nginx unificado (context/nginx.conf)
+- **Motivo:** Antes existían dos server blocks separados en distintos archivos. El nginx de 10x-builders no enrutaba a expense-control.
+- **Resultado:** Un solo server block con `listen 80; listen 3000;` maneja todas las rutas.
 
 ---
 
@@ -471,3 +509,84 @@ desde fuera de la LAN.
 
 Con `VITE_API_URL=/expense-api` (relativa), el browser construye la URL usando el origen
 actual: LAN usa `http://192.168.1.212:3000/expense-api`, ngrok usa la URL del túnel.
+
+### Estrategia de caché para el frontend SPA
+
+```
+/expense/           → Cache-Control: no-cache          ← index.html, siempre fresco
+/expense/assets/*   → Cache-Control: immutable (1 año) ← JS/CSS con hash en nombre
+```
+
+Vite genera hashes en los nombres de archivo de assets (`index-BTXclito.js`). Cuando hay un
+deploy nuevo, los hashes cambian y el nuevo `index.html` (nunca cacheado) referencia los
+nuevos archivos. El browser descarga automáticamente el nuevo código sin intervención del usuario.
+
+---
+
+## Lecciones aprendidas
+
+### L1: `scp` crea nuevos inodes — nginx no ve el archivo nuevo
+`scp` sobre un archivo existente en el servidor crea un nuevo inode, rompiendo el bind mount
+de Docker que apunta al inode original.
+
+**Síntoma:** nginx.conf copiado pero nginx sigue sirviendo la config vieja.
+**Fix:** `docker restart 10x-builders-nginx` en lugar de `nginx -s reload`.
+
+### L2: `docker-compose` v1 lee `.env`, no `.env.production`
+El comando `docker-compose up` solo carga automáticamente el archivo `.env` del directorio.
+Para usar `.env.production` con Vite build args, hay que pasarlos explícitamente.
+
+**Fix:**
+```bash
+VITE_API_URL=/expense-api docker-compose up -d --build expense-app
+```
+
+### L3: React Router v6 — `basename` sin trailing slash
+`BrowserRouter` con `basename="/expense/"` falla en React Router v6: no matchea ninguna ruta.
+
+**Fix:**
+```typescript
+basename={import.meta.env.BASE_URL.replace(/\/$/, '') || '/'}
+```
+
+### L4: ngrok debe apuntar a `nginx:80`, no a `3000`
+Si ngrok apunta al puerto `3000` del host, el tráfico llega directamente a nginx (correcto).
+Pero si está configurado como `nginx:80` (nombre de contenedor Docker), ngrok resuelve el
+nombre dentro de la red Docker interna — esto es lo correcto porque ngrok está en la misma
+red (`10x-builders_internal`) que nginx.
+
+**Verificar:**
+```bash
+docker inspect 10x-builders-ngrok --format '{{json .Config.Cmd}}'
+# Esperado: ["http","nginx:80","--log=stdout"]
+```
+
+### L5: `expense_network` debe estar en el compose de 10x-builders
+El nginx de 10x-builders necesita alcanzar `expense-app` y `expense-api` que están en
+`expense_network`. Sin agregar esa red al servicio nginx de 10x-builders, todos los proxies
+a expense devuelven 502.
+
+**Fix en `/opt/10x-builders/docker-compose.yml`:**
+- Agregar `expense_network` a `services.nginx.networks`
+- Declarar `expense_network` como red externa en `networks:`
+
+### L6: VITE_API_URL absoluta rompe ngrok (mixed content)
+Una URL absoluta con `http://` se hornea en el bundle. Cuando el usuario accede por ngrok
+(HTTPS), el browser bloquea la petición HTTP al API por política de mixed content.
+
+**Fix:** `VITE_API_URL=/expense-api` (relativa — funciona desde cualquier origen).
+
+### L7: Cache del browser — pantalla en blanco tras deploy
+El browser cacheaba el `index.html` viejo que referenciaba assets con hashes obsoletos.
+Los nuevos assets (con nuevo hash) no existían en caché → pantalla en blanco.
+
+**Fix preventivo:** `Cache-Control: no-cache` en el location de nginx que sirve `index.html`.
+**Fix temporal para el usuario:** hard refresh (`Cmd+Shift+R`).
+
+---
+
+## Referencias rápidas
+
+- Diagnóstico completo: ver `quickly-commands.md`
+- Nginx unificado: `context/nginx.conf` → se copia a `/opt/10x-builders/nginx/nginx.conf`
+- Variables de entorno: `/opt/expense-control/.env.production` (NO en git)
