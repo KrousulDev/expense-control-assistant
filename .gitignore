@@ -24,6 +24,9 @@ node_modules/
 /db/supabase/.env.local
 /db/supabase/.env.local.example
 /db/supabase/.env.local.example
+# .env.production es un template (safe to commit); el archivo con secretos reales
+# debe llamarse .env.production.local y nunca commitearse
+/.env.production.local
 
 # Angular CLI and build artefacts
 /.angular-cli.json

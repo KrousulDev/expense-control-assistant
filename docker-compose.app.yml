@@ -1,0 +1,52 @@
+# App + API solamente — requiere BD externa ya corriendo en expense_network.
+#
+# Pre-requisito: la red expense_network y el contenedor expense_control_db
+# deben existir antes de levantar este compose.
+#   docker compose -f db/docker-compose.yml up -d
+#
+# Uso:
+#   docker compose -f docker-compose.app.yml up -d --build
+#
+# La variable DATABASE_URL en .env.production debe apuntar a:
+#   postgresql://postgres:<pass>@expense-db:5432/expense_control
+
+services:
+  expense-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: expense-control/api:latest
+    container_name: expense_control_api
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - expense_network
+
+  expense-app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://192.168.1.212:3000/expense-api}
+        VITE_BASE: /expense/
+    image: expense-control/app:latest
+    container_name: expense_control_app
+    restart: unless-stopped
+    depends_on:
+      - expense-api
+    networks:
+      - expense_network
+
+networks:
+  expense_network:
+    name: expense_network
+    external: true
