@@ -1,9 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import type { Database } from '../../../db/generated/database.types'
-
-type Profile = Database['public']['Tables']['profiles']['Row']
+import { profileService } from '../services/profileService'
+import { ApiError } from '../lib/apiClient'
+import type { Profile } from '../types'
 
 const PHONE_E164_RE = /^\+[1-9]\d{7,14}$/
 
@@ -25,29 +24,23 @@ export function SettingsPage() {
   } | null>(null)
 
   useEffect(() => {
-    if (!user) return
     async function load() {
-      const { data } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user!.id)
-        .single()
-
-      if (data) {
+      try {
+        const data = await profileService.get()
         setProfile(data)
         setDisplayName(data.display_name ?? '')
         setPhone(data.whatsapp_phone_e164 ?? '')
         setDefaultCurrency(data.default_currency)
         setTimezone(data.timezone)
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
     }
     void load()
-  }, [user])
+  }, [])
 
   const handleSave = async (e: FormEvent) => {
     e.preventDefault()
-    if (!user) return
     setMessage(null)
 
     if (phone && !PHONE_E164_RE.test(phone)) {
@@ -59,25 +52,23 @@ export function SettingsPage() {
     }
 
     setSaving(true)
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        display_name: displayName || null,
-        whatsapp_phone_e164: phone || null,
-        default_currency: defaultCurrency.toUpperCase(),
+    try {
+      const updated = await profileService.update({
+        displayName: displayName || null,
+        whatsappPhoneE164: phone || null,
+        defaultCurrency: defaultCurrency.toUpperCase(),
         timezone,
       })
-      .eq('id', user.id)
-
-    setSaving(false)
-    if (error) {
-      const text =
-        (error as { code?: string }).code === '23505'
-          ? 'Ese número de WhatsApp ya está registrado en otra cuenta.'
-          : error.message
-      setMessage({ type: 'error', text })
-    } else {
+      setProfile(updated)
       setMessage({ type: 'success', text: 'Perfil actualizado.' })
+    } catch (err) {
+      const text =
+        err instanceof ApiError
+          ? err.message
+          : 'Error al guardar. Intenta de nuevo.'
+      setMessage({ type: 'error', text })
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -98,9 +89,7 @@ export function SettingsPage() {
         className="bg-white rounded-xl border border-gray-200 p-6 space-y-5"
       >
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Nombre
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
           <input
             type="text"
             value={displayName}
@@ -112,7 +101,7 @@ export function SettingsPage() {
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Teléfono WhatsApp
+            Teléfono (E.164)
           </label>
           <input
             type="tel"
@@ -122,8 +111,7 @@ export function SettingsPage() {
             placeholder="+5215512345678"
           />
           <p className="text-xs text-gray-500 mt-1">
-            Formato E.164 con código de país. Este número se usa para vincular
-            tus mensajes de WhatsApp con tu cuenta.
+            Formato E.164 con código de país.
           </p>
         </div>
 
@@ -179,9 +167,7 @@ export function SettingsPage() {
 
       {profile && (
         <div className="mt-6 bg-gray-50 rounded-xl border border-gray-200 p-4">
-          <h3 className="text-sm font-medium text-gray-700 mb-2">
-            Información de la cuenta
-          </h3>
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Información de la cuenta</h3>
           <dl className="text-sm space-y-1">
             <div className="flex justify-between">
               <dt className="text-gray-500">Email</dt>
@@ -189,9 +175,7 @@ export function SettingsPage() {
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-500">ID</dt>
-              <dd className="text-gray-900 font-mono text-xs">
-                {profile.id}
-              </dd>
+              <dd className="text-gray-900 font-mono text-xs">{profile.id}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-500">Creado</dt>

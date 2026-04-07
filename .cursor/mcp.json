@@ -1,9 +1,3 @@
 {
-    "mcpServers": {
-      "local-database": {
-        "name": "Local Database MCP",
-        "url": "http://127.0.0.1:54321/mcp",
-        "headers": {}
-      }
-    }
-  }
+  "mcpServers": {}
+}

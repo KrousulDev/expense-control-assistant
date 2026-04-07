@@ -1,11 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { Plus, Trash2 } from 'lucide-react'
-import type { Database } from '../../../db/generated/database.types'
-
-type Budget = Database['public']['Tables']['budgets']['Row']
-type Category = Database['public']['Tables']['categories']['Row']
+import { budgetsService } from '../services/budgetsService'
+import { categoriesService } from '../services/categoriesService'
+import { transactionsService } from '../services/transactionsService'
+import type { Budget, Category } from '../types'
 
 interface BudgetWithProgress extends Budget {
   category_name: string | null
@@ -40,43 +39,29 @@ export function BudgetsPage() {
     setLoading(true)
     const { start, end } = monthRange(month)
 
-    const [budgetRes, catRes, txRes] = await Promise.all([
-      supabase.from('budgets').select('*').eq('month', month),
-      supabase
-        .from('categories')
-        .select('*')
-        .order('sort_order', { ascending: true }),
-      supabase
-        .from('transactions')
-        .select('amount, category_id')
-        .eq('type', 'expense')
-        .gte('occurred_at', start)
-        .lt('occurred_at', end),
+    const [allBudgets, allCategories, txRows] = await Promise.all([
+      budgetsService.list(month),
+      categoriesService.list(),
+      transactionsService.list({ type: 'expense', from: start, to: end, pageSize: 1000 }),
     ])
 
-    const allBudgets = (budgetRes.data ?? []) as Budget[]
-    const allCategories = (catRes.data ?? []) as Category[]
-    const txRows = txRes.data ?? []
-
-    setCategories(allCategories)
-    const catMap = new Map(allCategories.map((c) => [c.id, c.name]))
+    const cats = allCategories as Category[]
+    setCategories(cats)
+    const catMap = new Map(cats.map((c) => [c.id, c.name]))
 
     const spentByCategory = new Map<string | null, number>()
     let totalSpent = 0
     for (const tx of txRows) {
       const amt = Number(tx.amount)
       totalSpent += amt
-      const key = tx.category_id
-      spentByCategory.set(key, (spentByCategory.get(key) ?? 0) + amt)
+      spentByCategory.set(tx.category_id, (spentByCategory.get(tx.category_id) ?? 0) + amt)
     }
 
     setBudgets(
-      allBudgets.map((b) => ({
+      (allBudgets as Budget[]).map((b) => ({
         ...b,
         category_name: b.category_id ? (catMap.get(b.category_id) ?? null) : null,
-        spent: b.category_id
-          ? (spentByCategory.get(b.category_id) ?? 0)
-          : totalSpent,
+        spent: b.category_id ? (spentByCategory.get(b.category_id) ?? 0) : totalSpent,
       })),
     )
     setLoading(false)
@@ -92,11 +77,10 @@ export function BudgetsPage() {
     if (!user) return
     setSaving(true)
 
-    await supabase.from('budgets').insert({
-      user_id: user.id,
+    await budgetsService.create({
       month,
-      category_id: formCategoryId || null,
-      amount_limit: parseFloat(formAmount),
+      categoryId: formCategoryId || null,
+      amountLimit: parseFloat(formAmount),
       currency: formCurrency.toUpperCase(),
     })
 
@@ -108,15 +92,12 @@ export function BudgetsPage() {
   }
 
   const handleDelete = async (id: string) => {
-    await supabase.from('budgets').delete().eq('id', id)
+    await budgetsService.remove(id)
     await loadData()
   }
 
   const fmt = (n: number) =>
-    n.toLocaleString('es-MX', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
+    n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
   const pct = (spent: number, limit: number) =>
     Math.min(Math.round((spent / limit) * 100), 100)
@@ -159,16 +140,12 @@ export function BudgetsPage() {
               >
                 <option value="">Global (todas)</option>
                 {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
+                  <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Límite
-              </label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Límite</label>
               <input
                 type="number"
                 required
@@ -181,9 +158,7 @@ export function BudgetsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Moneda
-              </label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Moneda</label>
               <input
                 type="text"
                 required
@@ -209,9 +184,7 @@ export function BudgetsPage() {
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-600" />
         </div>
       ) : budgets.length === 0 ? (
-        <p className="text-sm text-gray-500 py-8 text-center">
-          No hay presupuestos para este mes.
-        </p>
+        <p className="text-sm text-gray-500 py-8 text-center">No hay presupuestos para este mes.</p>
       ) : (
         <div className="space-y-3">
           {budgets.map((b) => {
@@ -219,18 +192,13 @@ export function BudgetsPage() {
             const overBudget = b.spent > Number(b.amount_limit)
 
             return (
-              <div
-                key={b.id}
-                className="bg-white rounded-xl border border-gray-200 p-4"
-              >
+              <div key={b.id} className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="flex items-center justify-between mb-2">
                   <div>
                     <span className="text-sm font-medium text-gray-900">
                       {b.category_name ?? 'Global'}
                     </span>
-                    <span className="text-xs text-gray-500 ml-2">
-                      {b.currency}
-                    </span>
+                    <span className="text-xs text-gray-500 ml-2">{b.currency}</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-sm text-gray-600">
@@ -246,9 +214,7 @@ export function BudgetsPage() {
                 </div>
                 <div className="w-full bg-gray-100 rounded-full h-2">
                   <div
-                    className={`h-2 rounded-full transition-all ${
-                      overBudget ? 'bg-red-500' : 'bg-violet-500'
-                    }`}
+                    className={`h-2 rounded-full transition-all ${overBudget ? 'bg-red-500' : 'bg-violet-500'}`}
                     style={{ width: `${percent}%` }}
                   />
                 </div>

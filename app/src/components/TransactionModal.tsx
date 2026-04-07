@@ -1,9 +1,6 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
-import type { Database } from '../../../db/generated/database.types'
-
-type Transaction = Database['public']['Tables']['transactions']['Row']
-type Category = Database['public']['Tables']['categories']['Row']
+import { transactionsService } from '../services/transactionsService'
+import type { Transaction, Category } from '../types'
 
 interface Props {
   transaction: Transaction & { category_name?: string }
@@ -12,19 +9,12 @@ interface Props {
   onSaved: () => void
 }
 
-export function TransactionModal({
-  transaction,
-  categories,
-  onClose,
-  onSaved,
-}: Props) {
+export function TransactionModal({ transaction, categories, onClose, onSaved }: Props) {
   const [type, setType] = useState<'expense' | 'income'>(transaction.type)
   const [amount, setAmount] = useState(String(transaction.amount))
   const [description, setDescription] = useState(transaction.description ?? '')
   const [categoryId, setCategoryId] = useState(transaction.category_id ?? '')
-  const [occurredAt, setOccurredAt] = useState(
-    toLocalDatetimeInput(transaction.occurred_at),
-  )
+  const [occurredAt, setOccurredAt] = useState(toLocalDatetimeInput(transaction.occurred_at))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -44,35 +34,28 @@ export function TransactionModal({
     setSaving(true)
     setError(null)
 
-    const { error: supabaseError } = await supabase
-      .from('transactions')
-      .update({
+    try {
+      await transactionsService.update(transaction.id, {
         type,
         amount: parsedAmount,
         description: description.trim() || null,
-        category_id: categoryId || null,
-        occurred_at: new Date(occurredAt).toISOString(),
-        category_overridden: categoryId !== transaction.category_id,
+        categoryId: categoryId || null,
+        occurredAt: new Date(occurredAt).toISOString(),
+        categoryOverridden: categoryId !== transaction.category_id,
       })
-      .eq('id', transaction.id)
-
-    setSaving(false)
-
-    if (supabaseError) {
+      onSaved()
+    } catch {
       setError('Error al guardar. Intenta de nuevo.')
-      return
+    } finally {
+      setSaving(false)
     }
-
-    onSaved()
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 p-6">
         <div className="flex items-center justify-between mb-5">
-          <h3 className="text-base font-semibold text-gray-900">
-            Editar movimiento
-          </h3>
+          <h3 className="text-base font-semibold text-gray-900">Editar movimiento</h3>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -85,11 +68,8 @@ export function TransactionModal({
         </div>
 
         <div className="space-y-4">
-          {/* Tipo */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Tipo
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
             <select
               value={type}
               onChange={(e) => setType(e.target.value as 'expense' | 'income')}
@@ -100,11 +80,8 @@ export function TransactionModal({
             </select>
           </div>
 
-          {/* Monto */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Monto
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Monto</label>
             <input
               type="number"
               min="0.01"
@@ -115,11 +92,8 @@ export function TransactionModal({
             />
           </div>
 
-          {/* Descripción */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Descripción
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
             <input
               type="text"
               value={description}
@@ -129,11 +103,8 @@ export function TransactionModal({
             />
           </div>
 
-          {/* Categoría */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Categoría
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Categoría</label>
             <select
               value={categoryId}
               onChange={(e) => setCategoryId(e.target.value)}
@@ -141,18 +112,13 @@ export function TransactionModal({
             >
               <option value="">Sin categoría</option>
               {categories.map((cat) => (
-                <option key={cat.id} value={cat.id}>
-                  {cat.name}
-                </option>
+                <option key={cat.id} value={cat.id}>{cat.name}</option>
               ))}
             </select>
           </div>
 
-          {/* Fecha */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Fecha y hora
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fecha y hora</label>
             <input
               type="datetime-local"
               value={occurredAt}
@@ -161,9 +127,7 @@ export function TransactionModal({
             />
           </div>
 
-          {error && (
-            <p className="text-sm text-red-600">{error}</p>
-          )}
+          {error && <p className="text-sm text-red-600">{error}</p>}
         </div>
 
         <div className="flex gap-3 mt-6">
@@ -174,7 +138,7 @@ export function TransactionModal({
             Cancelar
           </button>
           <button
-            onClick={handleSave}
+            onClick={() => void handleSave()}
             disabled={saving}
             className="flex-1 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
           >

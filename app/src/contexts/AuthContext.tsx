@@ -1,55 +1,51 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { supabase } from '../lib/supabase'
 import { AuthContext } from './auth-context'
+import { authService } from '../services/authService'
+import { getToken, clearToken } from '../lib/apiClient'
+import type { User } from '../types'
+
+function parseUserFromToken(token: string): User | null {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return { id: payload.sub as string, email: payload.email as string }
+  } catch {
+    return null
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<
-    import('@supabase/supabase-js').User | null
-  >(null)
-  const [session, setSession] = useState<
-    import('@supabase/supabase-js').Session | null
-  >(null)
+  const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-    })
-
-    return () => subscription.unsubscribe()
+    const token = getToken()
+    if (token) {
+      const parsed = parseUserFromToken(token)
+      setUser(parsed)
+    }
+    setLoading(false)
   }, [])
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
-    if (error) throw error
+    await authService.login(email, password)
+    const token = getToken()
+    if (token) setUser(parseUserFromToken(token))
   }
 
   const signUp = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({ email, password })
-    if (error) throw error
+    await authService.register(email, password)
+    const token = getToken()
+    if (token) setUser(parseUserFromToken(token))
   }
 
-  const signOut = async () => {
-    const { error } = await supabase.auth.signOut()
-    if (error) throw error
+  const signOut = () => {
+    authService.logout()
+    clearToken()
+    setUser(null)
   }
 
   return (
-    <AuthContext.Provider
-      value={{ user, session, loading, signIn, signUp, signOut }}
-    >
+    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut }}>
       {children}
     </AuthContext.Provider>
   )

@@ -3,94 +3,100 @@ alwaysApply: true
 ---
 
 # Onboarding
-- **Proyecto:** WebApp de Control de Gastos con Entrada Conversacional (WhatsApp + Dashboard Web).
-- **Objetivo:** Permitir a los usuarios registrar gastos e ingresos mediante lenguaje natural (WhatsApp) y visualizar/analizar su estado financiero en una web app con asistencia de AI.
+- **Proyecto:** WebApp de Control de Gastos — Dashboard Web + API REST consumible por agentes externos de AI.
+- **Objetivo:** Permitir a los usuarios registrar gastos e ingresos desde el dashboard web y visualizar su estado financiero. El API REST también expone endpoints para ser consumido por un agente de AI externo.
 - **Stack:**
   - Frontend: ReactJS (Vite) + Tailwind
   - Backend: Node.js (NestJS)
-  - Base de datos: Supabase (PostgreSQL)
-  - Integraciones: WhatsApp (Twilio), OpenAI (NLP)
+  - Base de datos: PostgreSQL 17 en Docker
+  - Auth: JWT (bcrypt + @nestjs/jwt)
 - **Gestor de Paquetes:** npm
 - **Estructura:**
-  - `/app`: Frontend (dashboard financiero)
-  - `/api`: Backend (webhooks, lógica de negocio, integración AI)
-  - `/ai`: Prompts y lógica de interpretación
-  - `/db`: Esquemas y migraciones
+  - `/app`: Frontend (dashboard financiero, auth JWT)
+  - `/api`: Backend REST (auth, transacciones, categorías, presupuestos, perfiles)
+  - `/db`: Esquema SQL (`init.sql`) que inicializa el contenedor Docker
+  - `/ai`: Solo contiene `legacy-ai.md` — ver ese archivo para contexto histórico
+- **Base de datos:**
+  - Contenedor Docker: `docker compose up -d` (ver `docker-compose.yml`)
+  - Schema: `db/init.sql` (se aplica automáticamente al iniciar el contenedor por primera vez)
+  - Para reiniciar la BD limpia: `npm run db:reset`
 
 # Comandos Críticos
-- **Setup:** `npm install`
+- **Setup:** `npm install && npm run db:start`
 - **Dev:** `npm run dev`
-- **DB:** `npm run supabase:gen`
+- **DB start:** `npm run db:start`
+- **DB reset:** `npm run db:reset`
 - **Lint:** `npm run lint`
+
+# Arquitectura de comunicación
+
+```
+app/ (React) → services/ → apiClient.ts → api/ (NestJS) → PostgreSQL (Docker)
+```
+
+- El frontend NUNCA accede a la base de datos directamente
+- Toda comunicación es por HTTP REST con JWT en el header `Authorization: Bearer <token>`
+- El token se almacena en `localStorage` y se incluye en cada request automáticamente
+
+# Módulos del API
+
+| Módulo | Endpoints | Guard |
+|--------|-----------|-------|
+| `auth` | `POST /auth/register`, `POST /auth/login` | Público |
+| `profile` | `GET /profile`, `PUT /profile` | JwtAuthGuard |
+| `transactions` | `GET/POST /transactions`, `PUT/DELETE /transactions/:id` | JwtAuthGuard |
+| `categories` | `GET /categories` | JwtAuthGuard |
+| `budgets` | `GET/POST /budgets`, `DELETE /budgets/:id` | JwtAuthGuard |
 
 # Reglas de Agente
 
 1. **Contexto del dominio:**
-   - La app es financial + conversational AI
-   - Priorizar interpretación correcta sobre complejidad técnica
-   - Considerar ambigüedad en lenguaje natural
+   - La app es un dashboard financiero personal
+   - El API también es consumido por un agente de AI externo (ver `ai/legacy-ai.md`)
+   - Priorizar claridad y correctitud sobre complejidad técnica
 
 2. **Tool & Skill Discovery:**
    - Revisar lógica existente antes de implementar
-   - Reutilizar servicios de parsing, categorización y respuestas
-   - Si existe una Skill específica para la tarea (ej. generar migraciones, refactorizar), úsala prioritariamente para asegurar consistencia.
+   - Reutilizar `DatabaseService.query()` para acceso a BD
+   - Si existe una Skill específica para la tarea, úsala prioritariamente
 
 3. **Verificación Delegada:**
-   - Al terminar una implementación o corrección, delega la verificación al subagente `qa-engineer`. No corras tests directamente.
-   - Ante bugs complejos, define primero el caso de prueba que los reproduzca y pásaselo al `qa-engineer`.
-   - Invoca al subagente `qa-engineer` (ej: "Usa el subagente qa-engineer para verificar estos casos de prueba: 1. ..., 2. ...") pasándole EXPLÍCITAMENTE los casos de prueba específicos que aplican al feature implementado. Evita pedir que pruebe cosas innecesarias o flujos completos si no aplican. ESPERA su reporte detallado antes de dar la tarea por finalizada
+   - Al terminar una implementación, delega la verificación al subagente `qa-engineer`
+   - Ante bugs complejos, define primero el caso de prueba que los reproduzca
+   - Espera el reporte detallado del `qa-engineer` antes de dar la tarea por finalizada
 
 4. **Estilo:**
-   - Si el linter falla, corrígelo. No inventes reglas de estilo, sigue la config existente.
-   - Seguir estructura modular (NestJS)
+   - Si el linter falla, corrígelo. Sigue la config existente.
+   - Seguir estructura modular (NestJS): module → controller → service
    - Evitar duplicación de lógica
    - Código claro y explícito
 
 # Flujo de Implementación
 
-El flujo obligatorio de trabajo para cualquier implementación debe ser:
-
 1. **Diseño y aclaración de casos de uso**
-   - Entiende primero el escenario para que te permita definir los casos de prueba.
-   - Definir inputs reales (ej: "gasté 20k en comida")
-   - Determinar intención, datos esperados y respuesta
+   - Definir inputs reales y comportamiento esperado
+   - Determinar qué endpoints/servicios se ven afectados
 
 2. **Planeación**
-   - Diseña la solución para cumplir con esos casos de prueba.
-   - Definir endpoints, servicios y estructuras de datos.
+   - Diseña la solución (endpoints, DTOs, servicios, queries SQL)
 
 3. **Implementación**
-   - Entendiendo los casos de prueba y el plan, implementa lo acordado.
-   - Controller
-   - Service
-   - AI layer
-   - Persistencia
+   - Controller → Service → DatabaseService.query()
+   - Actualizar tipos en `app/src/types/` si corresponde
+   - Actualizar servicio en `app/src/services/` si corresponde
 
 4. **Verificación**
-   - Al terminar, delega al subagente `qa-engineer` para que corra los tests y entregue el reporte.
-   - No corras tests manualmente; es responsabilidad exclusiva del `qa-engineer`.
+   - Delega al subagente `qa-engineer` para tests y reporte
 
 # Principios de Implementación
 
-1. **DRY**
-   - No repitas código; abstrae lógica reutilizable.
-   - Centralizar parsing
-   - No duplicar prompts
-
-2. **Simplicidad primero**
-   - Evita la sobre-ingeniería. La solución más simple suele ser la correcta.
-   - Monolito modular
-   - Evitar sobreingeniería
-
-3. **Diseño orientado a casos de prueba:**
-   - Define los casos de prueba antes de implementar; la ejecución es responsabilidad del `qa-engineer`.
-
-4. **AI-first design**
-   - Diseñar prompts cuidadosamente
-   - Evitar reglas rígidas innecesarias
+1. **DRY** — No repitas lógica; centraliza en servicios
+2. **Simplicidad primero** — Monolito modular, sin sobreingeniería
+3. **Diseño orientado a casos de prueba** — Define casos antes de implementar
+4. **Seguridad por defecto** — Todos los endpoints de datos requieren JWT
 
 # Debugging
 
-- Cuando se reporte un bug, no empieces a intentar arreglarlo inmediatamente.
-- Define primero el caso de prueba que reproduzca el bug y delégalo al subagente `qa-engineer`.
-- Una vez confirmado el caso fallido, implementa la corrección.
+- Define primero el caso de prueba que reproduzca el bug
+- Delégalo al subagente `qa-engineer` para confirmación
+- Una vez confirmado el caso fallido, implementa la corrección

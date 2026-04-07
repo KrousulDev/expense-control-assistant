@@ -37,15 +37,14 @@ Los tests son el **contrato ejecutable** del comportamiento acordado en los caso
 
 ## Dónde están y cómo se nombran (monorepo npm workspaces)
 
-El repositorio tiene workspaces `app`, `api` y `ai`. Cada uno define su propio `test` en su `package.json`; la raíz ejecuta todos los que existan.
+El repositorio tiene workspaces `app` y `api`. Cada uno define su propio `test` en su `package.json`; la raíz ejecuta todos los que existan.
 
 | Workspace | Herramienta | Ubicación y patrón de archivos |
 |-----------|-------------|--------------------------------|
 | **`api/`** (NestJS) | Jest (`ts-jest`) | Unitarios en `api/src/**/*.spec.ts` (convención Nest: junto al código). Config Jest en `api/package.json` (`testRegex`: `.*\.spec\.ts$`, `rootDir`: `src`). E2E: `api/test/**/*.e2e-spec.ts` con `npm run test:e2e -w api` (config `api/test/jest-e2e.json`). |
 | **`app/`** (React + Vite) | Vitest + jsdom | Archivos `*.test.*` / `*.spec.*` bajo `app/src/` (p. ej. `App.test.tsx`). Setup global: `app/src/test/setup.ts`; opciones en `app/vite.config.ts` (`test.environment`, `setupFiles`). Testing Library para componentes. |
-| **`ai/`** (lógica / prompts) | Vitest (entorno Node) | `ai/src/**/*.spec.ts` y `ai/src/**/*.test.ts` (ver `ai/vitest.config.ts`). Imports ESM coherentes con el paquete (`type: module`). |
 
-**`db/`** no define tests en el workspace actual; tipos y migraciones se validan con el flujo de Supabase / BD según corresponda.
+**`db/`** y **`ai/`** no tienen tests — `ai/` solo contiene `legacy-ai.md`.
 
 ## Cómo se implementan (por capa)
 
@@ -53,15 +52,15 @@ El repositorio tiene workspaces `app`, `api` y `ai`. Cada uno define su propio `
 - **App:** `vitest` + `@testing-library/react` (y `@testing-library/jest-dom` vía setup) para renderizar y aserciones orientadas al usuario (`getByRole`, etc.).
 - **AI:** tests unitarios puros en Node (sin navegador); `describe` / `it` / `expect` importados de `vitest` salvo que se active `globals` en config.
 
-Mantener **un comportamiento verificable por test** y mocks solo en fronteras externas (HTTP, OpenAI, Twilio, Supabase), no para “tapar” la lógica que quieres garantizar.
+Mantener **un comportamiento verificable por test** y mocks solo en fronteras externas (HTTP, `DatabaseService`), no para “tapar” la lógica que quieres garantizar.
 
 ## Verificación y scripts
 
 | Objetivo | Comando (desde la raíz del repo) |
 |----------|----------------------------------|
 | **Suite completa del monorepo** | `npm run test` — ejecuta `test` en cada workspace con script (`--workspaces --if-present`). |
-| **Solo un paquete** | `npm run test -w app`, `npm run test -w api`, `npm run test -w ai`. |
-| **Modo watch (desarrollo)** | `npm run test:watch -w app` / `npm run test:watch -w api` / `npm run test:watch -w ai`. |
+| **Solo un paquete** | `npm run test -w app`, `npm run test -w api`. |
+| **Modo watch (desarrollo)** | `npm run test:watch -w app` / `npm run test:watch -w api`. |
 | **Cobertura** | `npm run test:cov -w app` o `npm run test:cov -w api` (cuando haga falta medir cobertura). |
 | **E2E API** | `npm run test:e2e -w api` (archivos `*.e2e-spec.ts` en `api/test/`). |
 | **Calidad tras cambios** | `npm run lint` (todos los workspaces con lint) además de tests. |
@@ -74,7 +73,6 @@ Flujo mínimo tras tocar código: **`npm run test`** y, si aplica, **`npm run li
 |------|-------------------------|
 | **API** | `*.spec.ts` en `api/src/` junto al servicio/controlador (o subcarpeta del feature). |
 | **App** | `*.test.tsx` / `*.test.ts` junto al componente o hook. |
-| **AI** | `*.spec.ts` en `ai/src/` junto al módulo probado. |
 
 ## Cómo escribir el test para que el caso de uso quede claro
 

@@ -1,8 +1,6 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
-import type { Database } from '../../../db/generated/database.types'
-
-type Transaction = Database['public']['Tables']['transactions']['Row']
+import { transactionsService } from '../services/transactionsService'
+import type { Transaction } from '../types'
 
 interface Props {
   transaction: Transaction
@@ -14,26 +12,20 @@ export function DeleteConfirmDialog({ transaction, onClose, onDeleted }: Props) 
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const label =
-    transaction.description ?? transaction.raw_user_text ?? 'este movimiento'
+  const label = transaction.description ?? transaction.raw_user_text ?? 'este movimiento'
 
   async function handleDelete() {
     setDeleting(true)
     setError(null)
 
-    const { error: supabaseError } = await supabase
-      .from('transactions')
-      .delete()
-      .eq('id', transaction.id)
-
-    setDeleting(false)
-
-    if (supabaseError) {
+    try {
+      await transactionsService.remove(transaction.id)
+      onDeleted()
+    } catch {
       setError('Error al eliminar. Intenta de nuevo.')
-      return
+    } finally {
+      setDeleting(false)
     }
-
-    onDeleted()
   }
 
   return (
@@ -46,9 +38,7 @@ export function DeleteConfirmDialog({ transaction, onClose, onDeleted }: Props) 
             </svg>
           </div>
           <div>
-            <h3 className="text-base font-semibold text-gray-900">
-              Eliminar movimiento
-            </h3>
+            <h3 className="text-base font-semibold text-gray-900">Eliminar movimiento</h3>
             <p className="mt-1 text-sm text-gray-600">
               ¿Estás seguro de que deseas eliminar{' '}
               <span className="font-medium text-gray-900">"{label}"</span>?
@@ -57,9 +47,7 @@ export function DeleteConfirmDialog({ transaction, onClose, onDeleted }: Props) 
           </div>
         </div>
 
-        {error && (
-          <p className="text-sm text-red-600 mb-4">{error}</p>
-        )}
+        {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
 
         <div className="flex gap-3">
           <button
@@ -69,7 +57,7 @@ export function DeleteConfirmDialog({ transaction, onClose, onDeleted }: Props) 
             Cancelar
           </button>
           <button
-            onClick={handleDelete}
+            onClick={() => void handleDelete()}
             disabled={deleting}
             className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
           >

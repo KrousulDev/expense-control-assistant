@@ -2,14 +2,22 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { SupabaseModule } from './supabase/supabase.module';
-import { WebhooksModule } from './webhooks/webhooks.module';
+import { DatabaseModule } from './database/database.module';
+import { AuthModule } from './auth/auth.module';
+import { ProfilesModule } from './profiles/profiles.module';
+import { TransactionsModule } from './transactions/transactions.module';
+import { CategoriesModule } from './categories/categories.module';
+import { BudgetsModule } from './budgets/budgets.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    SupabaseModule,
-    WebhooksModule,
+    DatabaseModule,
+    AuthModule,
+    ProfilesModule,
+    TransactionsModule,
+    CategoriesModule,
+    BudgetsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

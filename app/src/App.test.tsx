@@ -2,19 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import App from './App'
 
-vi.mock('./lib/supabase', () => {
-  const session = null
-  return {
-    supabase: {
-      auth: {
-        getSession: vi.fn().mockResolvedValue({ data: { session } }),
-        onAuthStateChange: vi.fn().mockReturnValue({
-          data: { subscription: { unsubscribe: vi.fn() } },
-        }),
-      },
-    },
-  }
-})
+vi.mock('./lib/apiClient', () => ({
+  getToken: vi.fn().mockReturnValue(null),
+  setToken: vi.fn(),
+  clearToken: vi.fn(),
+  api: {
+    get: vi.fn(),
+    post: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+  },
+  ApiError: class ApiError extends Error {
+    readonly status: number
+    constructor(status: number, message: string) {
+      super(message)
+      this.status = status
+    }
+  },
+}))
 
 beforeEach(() => {
   vi.clearAllMocks()

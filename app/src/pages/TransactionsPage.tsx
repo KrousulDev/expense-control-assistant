@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
-import type { Database } from '../../../db/generated/database.types'
+import { transactionsService } from '../services/transactionsService'
+import { categoriesService } from '../services/categoriesService'
 import { TransactionModal } from '../components/TransactionModal'
 import { DeleteConfirmDialog } from '../components/DeleteConfirmDialog'
-
-type Transaction = Database['public']['Tables']['transactions']['Row']
-type Category = Database['public']['Tables']['categories']['Row']
+import type { Transaction, Category } from '../types'
 
 const PAGE_SIZE = 20
 
@@ -17,9 +15,7 @@ export function TransactionsPage() {
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(0)
   const [hasMore, setHasMore] = useState(true)
-  const [typeFilter, setTypeFilter] = useState<'all' | 'expense' | 'income'>(
-    'all',
-  )
+  const [typeFilter, setTypeFilter] = useState<'all' | 'expense' | 'income'>('all')
   const [editingTx, setEditingTx] = useState<
     (Transaction & { category_name?: string }) | null
   >(null)
@@ -28,32 +24,21 @@ export function TransactionsPage() {
   const load = useCallback(async () => {
     setLoading(true)
 
-    let query = supabase
-      .from('transactions')
-      .select('*')
-      .order('occurred_at', { ascending: false })
-      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
-
-    if (typeFilter !== 'all') {
-      query = query.eq('type', typeFilter)
-    }
-
-    const [txResult, catResult] = await Promise.all([
-      query,
-      supabase.from('categories').select('id, name'),
+    const [rows, cats] = await Promise.all([
+      transactionsService.list({
+        page,
+        pageSize: PAGE_SIZE,
+        type: typeFilter === 'all' ? undefined : typeFilter,
+      }),
+      categoriesService.list(),
     ])
 
-    const rows = txResult.data ?? []
-    const cats = (catResult.data ?? []) as Category[]
-    const catMap = new Map(cats.map((c) => [c.id, c.name]))
-
-    setCategories(cats)
+    const catMap = new Map((cats as Category[]).map((c) => [c.id, c.name]))
+    setCategories(cats as Category[])
     setTransactions(
       rows.map((t) => ({
         ...t,
-        category_name: t.category_id
-          ? (catMap.get(t.category_id) ?? '—')
-          : '—',
+        category_name: t.category_id ? (catMap.get(t.category_id) ?? '—') : '—',
       })),
     )
     setHasMore(rows.length === PAGE_SIZE)
@@ -65,17 +50,10 @@ export function TransactionsPage() {
   }, [load])
 
   const fmt = (n: number) =>
-    n.toLocaleString('es-MX', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
+    n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
   const channelLabel = (ch: string) => {
-    const labels: Record<string, string> = {
-      whatsapp: 'WhatsApp',
-      web: 'Web',
-      api: 'API',
-    }
+    const labels: Record<string, string> = { whatsapp: 'WhatsApp', web: 'Web', api: 'API' }
     return labels[ch] ?? ch
   }
 
@@ -102,9 +80,7 @@ export function TransactionsPage() {
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-600" />
         </div>
       ) : transactions.length === 0 ? (
-        <p className="text-sm text-gray-500 py-8 text-center">
-          No hay movimientos.
-        </p>
+        <p className="text-sm text-gray-500 py-8 text-center">No hay movimientos.</p>
       ) : (
         <>
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -121,10 +97,7 @@ export function TransactionsPage() {
               </thead>
               <tbody>
                 {transactions.map((tx) => (
-                  <tr
-                    key={tx.id}
-                    className="border-b border-gray-50 last:border-0"
-                  >
+                  <tr key={tx.id} className="border-b border-gray-50 last:border-0">
                     <td className="px-4 py-3 text-gray-600">
                       {new Date(tx.occurred_at).toLocaleDateString('es-MX', {
                         day: 'numeric',
@@ -135,17 +108,10 @@ export function TransactionsPage() {
                     <td className="px-4 py-3 text-gray-900">
                       {tx.description ?? tx.raw_user_text ?? '—'}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {tx.category_name}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {channelLabel(tx.source_channel)}
-                    </td>
-                    <td
-                      className={`px-4 py-3 text-right font-medium ${tx.type === 'expense' ? 'text-red-600' : 'text-green-600'}`}
-                    >
-                      {tx.type === 'expense' ? '-' : '+'}$
-                      {fmt(Number(tx.amount))}
+                    <td className="px-4 py-3 text-gray-600">{tx.category_name}</td>
+                    <td className="px-4 py-3 text-gray-600">{channelLabel(tx.source_channel)}</td>
+                    <td className={`px-4 py-3 text-right font-medium ${tx.type === 'expense' ? 'text-red-600' : 'text-green-600'}`}>
+                      {tx.type === 'expense' ? '-' : '+'}${fmt(Number(tx.amount))}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">

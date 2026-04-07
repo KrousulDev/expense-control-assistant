@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
 import { TrendingDown, TrendingUp, Scale } from 'lucide-react'
-import type { Database } from '../../../db/generated/database.types'
-
-type Transaction = Database['public']['Tables']['transactions']['Row']
-type Category = Database['public']['Tables']['categories']['Row']
+import { transactionsService } from '../services/transactionsService'
+import { categoriesService } from '../services/categoriesService'
+import type { Transaction, Category } from '../types'
 
 interface MonthlySummary {
   totalExpenses: number
@@ -38,19 +36,12 @@ export function DashboardPage() {
     const to = endOfMonth(now)
 
     async function load() {
-      const [txResult, catResult] = await Promise.all([
-        supabase
-          .from('transactions')
-          .select('*')
-          .gte('occurred_at', from)
-          .lt('occurred_at', to)
-          .order('occurred_at', { ascending: false }),
-        supabase.from('categories').select('id, name'),
+      const [transactions, categories] = await Promise.all([
+        transactionsService.list({ from, to, pageSize: 100 }),
+        categoriesService.list(),
       ])
 
-      const transactions = txResult.data ?? []
-      const categories = (catResult.data ?? []) as Category[]
-      const catMap = new Map(categories.map((c) => [c.id, c.name]))
+      const catMap = new Map((categories as Category[]).map((c) => [c.id, c.name]))
 
       const totalExpenses = transactions
         .filter((t) => t.type === 'expense')
@@ -60,18 +51,12 @@ export function DashboardPage() {
         .filter((t) => t.type === 'income')
         .reduce((sum, t) => sum + Number(t.amount), 0)
 
-      setSummary({
-        totalExpenses,
-        totalIncome,
-        balance: totalIncome - totalExpenses,
-      })
+      setSummary({ totalExpenses, totalIncome, balance: totalIncome - totalExpenses })
 
       setRecentTx(
         transactions.slice(0, 10).map((t) => ({
           ...t,
-          category_name: t.category_id
-            ? (catMap.get(t.category_id) ?? '—')
-            : '—',
+          category_name: t.category_id ? (catMap.get(t.category_id) ?? '—') : '—',
         })),
       )
       setLoading(false)
@@ -89,10 +74,7 @@ export function DashboardPage() {
   }
 
   const fmt = (n: number) =>
-    n.toLocaleString('es-MX', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
+    n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
   const monthLabel = new Date().toLocaleDateString('es-MX', {
     month: 'long',
@@ -110,40 +92,30 @@ export function DashboardPage() {
             <TrendingDown className="h-4 w-4 text-red-500" />
             Gastos
           </div>
-          <p className="text-2xl font-semibold text-gray-900">
-            ${fmt(summary.totalExpenses)}
-          </p>
+          <p className="text-2xl font-semibold text-gray-900">${fmt(summary.totalExpenses)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-5">
           <div className="flex items-center gap-2 text-sm text-gray-500 mb-1">
             <TrendingUp className="h-4 w-4 text-green-500" />
             Ingresos
           </div>
-          <p className="text-2xl font-semibold text-gray-900">
-            ${fmt(summary.totalIncome)}
-          </p>
+          <p className="text-2xl font-semibold text-gray-900">${fmt(summary.totalIncome)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-5">
           <div className="flex items-center gap-2 text-sm text-gray-500 mb-1">
             <Scale className="h-4 w-4 text-violet-500" />
             Balance
           </div>
-          <p
-            className={`text-2xl font-semibold ${summary.balance >= 0 ? 'text-green-600' : 'text-red-600'}`}
-          >
+          <p className={`text-2xl font-semibold ${summary.balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
             ${fmt(summary.balance)}
           </p>
         </div>
       </div>
 
-      <h3 className="text-sm font-medium text-gray-900 mb-3">
-        Movimientos recientes
-      </h3>
+      <h3 className="text-sm font-medium text-gray-900 mb-3">Movimientos recientes</h3>
 
       {recentTx.length === 0 ? (
-        <p className="text-sm text-gray-500 py-8 text-center">
-          No hay movimientos este mes.
-        </p>
+        <p className="text-sm text-gray-500 py-8 text-center">No hay movimientos este mes.</p>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">
@@ -157,10 +129,7 @@ export function DashboardPage() {
             </thead>
             <tbody>
               {recentTx.map((tx) => (
-                <tr
-                  key={tx.id}
-                  className="border-b border-gray-50 last:border-0"
-                >
+                <tr key={tx.id} className="border-b border-gray-50 last:border-0">
                   <td className="px-4 py-3 text-gray-600">
                     {new Date(tx.occurred_at).toLocaleDateString('es-MX', {
                       day: 'numeric',
@@ -170,12 +139,8 @@ export function DashboardPage() {
                   <td className="px-4 py-3 text-gray-900">
                     {tx.description ?? tx.raw_user_text ?? '—'}
                   </td>
-                  <td className="px-4 py-3 text-gray-600">
-                    {tx.category_name}
-                  </td>
-                  <td
-                    className={`px-4 py-3 text-right font-medium ${tx.type === 'expense' ? 'text-red-600' : 'text-green-600'}`}
-                  >
+                  <td className="px-4 py-3 text-gray-600">{tx.category_name}</td>
+                  <td className={`px-4 py-3 text-right font-medium ${tx.type === 'expense' ? 'text-red-600' : 'text-green-600'}`}>
                     {tx.type === 'expense' ? '-' : '+'}${fmt(Number(tx.amount))}
                   </td>
                 </tr>

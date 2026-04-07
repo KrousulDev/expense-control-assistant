@@ -3,17 +3,18 @@
   "private": true,
   "workspaces": [
     "app",
-    "api",
-    "ai"
+    "api"
   ],
   "scripts": {
     "dev": "concurrently -n app,api -c cyan,magenta \"npm run dev -w app\" \"npm run start:dev -w api\"",
     "dev:app": "npm run dev -w app",
     "dev:api": "npm run start:dev -w api",
-    "build": "npm run build -w ai && npm run build -w api && npm run build -w app",
+    "build": "npm run build -w api && npm run build -w app",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "supabase:gen": "mkdir -p db/generated && supabase gen types typescript --local --workdir db > db/generated/database.types.ts"
+    "db:start": "docker compose up -d",
+    "db:stop": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d"
   },
   "devDependencies": {
     "concurrently": "^9.2.0"

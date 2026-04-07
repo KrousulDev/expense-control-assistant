@@ -1,66 +1,82 @@
 ---
 name: modifying-database
-description: Guía para cambiar el esquema PostgreSQL local con Supabase CLI en este repo (migraciones SQL, aplicar cambios, reset). Usar al añadir tablas, columnas, índices, RLS, seeds, o cuando el usuario mencione migraciones, Supabase local o `db/supabase`.
+description: Guía para cambiar el esquema PostgreSQL local que corre en Docker (editar db/init.sql, reiniciar contenedor). Usar al añadir tablas, columnas, índices, seeds, o cuando el usuario mencione cambios de esquema, migraciones o db/init.sql.
 ---
 
-# Cambios en la base de datos (este proyecto)
+# Cambios en la base de datos (PostgreSQL en Docker)
 
-## Contexto del repo
+## Contexto
 
-El directorio de proyecto Supabase **no es la raíz del monorepo**: está en `db/` (ahí vive `supabase/config.toml`). El script `npm run supabase:gen` ya usa `--workdir db`.
+La base de datos es un contenedor Docker con PostgreSQL 17. El esquema completo (tablas, tipos, índices, seed de categorías) está en un único archivo:
 
-**Desde la raíz del repositorio**, pasa siempre `--workdir db` a la CLI de Supabase. Alternativa: `cd db` y ejecutar los mismos comandos sin `--workdir`.
-
-## Flujo habitual
-
-1. **Crear el archivo de migración** (nombre descriptivo en snake_case):
-
-   ```bash
-   supabase migration new nombre_migracion --workdir db --yes
-   ```
-
-   Se genera un `.sql` nuevo bajo `db/supabase/migrations/` con prefijo de timestamp.
-
-2. **Editar ese archivo** y escribir el SQL del cambio (DDL, políticas RLS, funciones, etc.). Una migración = un cambio de esquema coherente y reversible cuando tenga sentido (`down` manual o migración nueva si hace falta revertir).
-
-3. **Aplicar migraciones pendientes en la base local**:
-
-   ```bash
-   supabase migration up --workdir db
-   ```
-
-   Requiere stack local en marcha según tu entorno (p. ej. `supabase start` si aplica).
-
-4. **Tipos TypeScript** (si el esquema afecta al cliente/API):
-
-   ```bash
-   npm run supabase:gen
-   ```
-
-   Regenera `db/generated/database.types.ts`.
-
-## Si el historial de migraciones está corrupto
-
-En local, **reinicia la base** al estado definido por las migraciones del repo:
-
-```bash
-supabase db reset --workdir db
+```
+db/init.sql
 ```
 
-**Advertencia:** borra datos locales no respaldados; vuelve a aplicar migraciones y seeds configurados en `db/supabase/config.toml` (p. ej. `seed.sql`).
+Este archivo se aplica automáticamente cuando Docker inicia el contenedor **por primera vez** (montado en `docker-entrypoint-initdb.d/`). Para aplicar cambios después de la creación inicial, hay que reiniciar el contenedor con volumen limpio.
 
-## Comandos relacionados (referencia breve)
+**No existe Supabase CLI en este proyecto.** No usar `supabase migration new`, `supabase migration up`, ni `supabase db reset`.
 
-| Objetivo | Comando (desde raíz con `--workdir db`) |
-|----------|----------------------------------------|
-| Nueva migración vacía (no interactivo) | `supabase migration new nombre_migracion --yes` |
-| Aplicar pendientes (local) | `supabase migration up` |
-| Reset local + migraciones + seed | `supabase db reset` |
-| Subir migraciones al proyecto remoto (cuando toque) | `supabase db push` (requiere login/proyecto enlazado) |
+## Flujo para cambiar el esquema
+
+### 1. Editar `db/init.sql`
+
+Agregar o modificar las sentencias SQL necesarias:
+
+- Nuevas tablas: `CREATE TABLE IF NOT EXISTS public.nueva_tabla (...);`
+- Nuevas columnas: `ALTER TABLE public.tabla ADD COLUMN IF NOT EXISTS col tipo;`
+- Índices: `CREATE INDEX IF NOT EXISTS idx_name ON public.tabla (col);`
+- Datos seed: `INSERT INTO public.tabla (...) VALUES (...) ON CONFLICT DO ...;`
+
+### 2. Reiniciar el contenedor con volumen limpio
+
+```bash
+npm run db:reset
+# equivalente a: docker compose down -v && docker compose up -d
+```
+
+**Advertencia:** esto borra todos los datos. Útil en desarrollo local donde no hay datos de producción.
+
+### 3. Verificar que el esquema se aplicó
+
+```bash
+docker exec -it expense_control_db psql -U postgres -d expense_control -c "\dt public.*"
+```
+
+## Comandos de referencia
+
+| Objetivo | Comando |
+|----------|---------|
+| Iniciar contenedor | `npm run db:start` o `docker compose up -d` |
+| Detener contenedor | `npm run db:stop` o `docker compose down` |
+| Reset completo (borra datos) | `npm run db:reset` o `docker compose down -v && docker compose up -d` |
+| Ver logs | `docker logs expense_control_db --tail=50` |
+| Acceder a psql | `docker exec -it expense_control_db psql -U postgres -d expense_control` |
+
+## Variables de conexión
+
+```
+POSTGRES_DB: expense_control
+POSTGRES_USER: postgres
+POSTGRES_PASSWORD: postgres
+POSTGRES_HOST: localhost
+POSTGRES_PORT: 5432
+
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/expense_control
+```
+
+## Actualizar tipos TypeScript en el frontend
+
+Cuando se agregue o modifique una tabla, actualizar manualmente los tipos en:
+
+```
+app/src/types/index.ts
+```
+
+No existe `supabase:gen` — los tipos se mantienen manualmente alineados con `db/init.sql`.
 
 ## Buenas prácticas
 
-- Nombres de migración claros (`add_expenses_table`, no `update`).
-- Para evitar prompts bloqueantes en automatización/agentes, usar `--yes` en comandos que puedan pedir confirmación.
-- No editar migraciones ya aplicadas en entornos compartidos; añadir una nueva migración para corregir.
-- Tras cambios de esquema usados en código, ejecutar `npm run supabase:gen` y ajustar tipos/importaciones.
+- Usar `IF NOT EXISTS` en todas las sentencias para que `init.sql` sea idempotente.
+- El archivo `db/init.sql` es la única fuente de verdad del esquema.
+- Si se agregan nuevas entidades, también actualizar los servicios del API en `api/src/` y los tipos del frontend en `app/src/types/`.
