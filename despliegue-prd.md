@@ -1,421 +1,473 @@
 # Despliegue en Producción — Expense Control Assistant
 
-Servidor: `192.168.1.212` | Perfil SSH: `deploy`
+Servidor: `192.168.1.212` (Ubuntu) | Usuario SSH: `deploy`
 
 ---
 
-## Arquitectura final en el servidor
+## Arquitectura en producción
 
 ```
-Puerto 80  → nginx (10x-builders-nginx) → 10x-builders-web (existente, sin cambios)
-Puerto 3000 → nginx (10x-builders-nginx) → /expense/      → expense-app  (React, nginx:alpine)
-                                          → /expense-api/ → expense-api  (NestJS)
-Puerto 3002 → open-webui (movido de 3000)
+Internet (HTTPS)
+    │
+    ▼
+10x-builders-ngrok          ← túnel ngrok/ngrok:latest → nginx:80 (interno Docker)
+    │
+    ▼
+10x-builders-nginx          ← nginx:1.27-alpine
+  listen 80   (ngrok inbound)
+  listen 3000 (LAN directo, mapeado al host)
+    │
+    ├── /expense/           → expense-app:80      (React SPA, nginx:alpine)
+    ├── /expense-api/auth/  → expense-api:3000    (NestJS, rate limit auth)
+    ├── /expense-api/       → expense-api:3000    (NestJS REST)
+    ├── /agent              → web:3000            (Next.js / LLM agent)
+    ├── /api/auth/          → web:3000            (10x-builders auth)
+    ├── /api/               → web:3000            (10x-builders API)
+    └── /                   → redirect /expense/
+
+expense-api → expense_control_db:5432  (PostgreSQL 17)
 ```
 
-Todos los contenedores de Expense Control corren en la red Docker `expense_network`.
-El contenedor `10x-builders-nginx` se conecta a esa red para alcanzar `expense-app` y `expense-api` por hostname.
+**Redes Docker:**
+- `10x-builders_internal`: nginx ↔ web (10x-builders-web) ↔ ngrok
+- `expense_network`: nginx ↔ expense-app ↔ expense-api ↔ db
+
+`10x-builders-nginx` está en **ambas redes**, permitiéndole enrutar a todos los servicios.
+
+**Acceso:**
+- LAN: `http://192.168.1.212:3000`
+- Internet (ngrok): URL generada por ngrok (ver `http://192.168.1.212:4040`)
 
 ---
 
-## Pre-requisitos
+## Rutas y servicios
 
-En el servidor deben estar instalados:
-- Docker Engine >= 24
-- Docker Compose v2 (`docker compose` sin guion)
-- Git
-- Acceso SSH configurado como perfil `deploy` en `~/.ssh/config`:
+| Path | Servicio | Contenedor |
+|---|---|---|
+| `/expense/` | React SPA | `expense_control_app` |
+| `/expense-api/` | NestJS REST API | `expense_control_api` |
+| `/expense-api/auth/` | NestJS auth (rate limit estricto) | `expense_control_api` |
+| `/agent` | Next.js + LLM agent | `10x-builders-web` |
+| `/api/` | 10x-builders API | `10x-builders-web` |
+| `http://192.168.1.212:3002` | open-webui | `open-webui` |
+| `http://192.168.1.212:4040` | ngrok dashboard | `10x-builders-ngrok` |
+| `http://192.168.1.212:5432` | PostgreSQL 17 | `expense_control_db` |
 
-```
-Host deploy
-    HostName 192.168.1.212
-    User <tu-usuario>
-    IdentityFile ~/.ssh/id_ed25519
-```
+---
 
-Verifica acceso:
+## Pre-requisitos en el servidor
+
+> Ejecutar **directamente en el servidor** tras `ssh deploy@192.168.1.212`.
+
+### 1. Docker Engine
+
 ```bash
-ssh deploy "docker --version && docker compose version"
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+. /etc/os-release
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+  https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+```
+
+### 2. docker-compose v1 (el proyecto usa `docker-compose`, no `docker compose`)
+
+```bash
+sudo apt-get install -y docker-compose
+```
+
+### 3. Agregar usuario al grupo docker
+
+```bash
+sudo usermod -aG docker $(whoami)
+# Cerrar sesión y reconectar para que surta efecto
+```
+
+### 4. rsync
+
+```bash
+sudo apt-get install -y rsync
+```
+
+### 5. Puertos en firewall
+
+```bash
+sudo ufw allow 3000/tcp comment 'expense-control + 10x-builders'
+sudo ufw allow 3002/tcp comment 'open-webui'
+sudo ufw allow 4040/tcp comment 'ngrok dashboard'
+sudo ufw reload
 ```
 
 ---
 
-## Paso 1 — Clonar el repositorio en el servidor
+## Estructura de directorios en el servidor
 
-```bash
-ssh deploy
-mkdir -p ~/expense-control
-cd ~/expense-control
-git clone https://github.com/<tu-usuario>/expense-control-assistant.git .
-# o si ya existe:
-git pull origin trunk
+```
+/opt/
+├── expense-control/          ← proyecto expense-control-assistant
+│   ├── api/
+│   ├── app/
+│   ├── db/
+│   ├── context/
+│   ├── docker-compose.yml
+│   ├── docker-compose.app.yml
+│   └── .env.production       ← secretos reales (NO en git, NO en rsync)
+│
+└── 10x-builders/             ← proyecto 10x-builders (nginx + agente)
+    ├── nginx/
+    │   └── nginx.conf        ← bind mount en el contenedor (este repo: context/nginx.conf)
+    ├── docker-compose.yml
+    └── .env
 ```
 
 ---
 
-## Paso 2 — Crear el archivo `.env.production` en el servidor
+## Instalación inicial (primera vez)
+
+### Paso 1 — Crear directorios en el servidor
 
 ```bash
-# En tu máquina local, copia el template
-scp .env.production deploy:~/expense-control/.env.production
-
-# En el servidor, edita los valores CHANGE_ME
-ssh deploy "nano ~/expense-control/.env.production"
+ssh deploy@192.168.1.212 'mkdir -p /opt/expense-control'
 ```
 
-Valores mínimos a cambiar:
+### Paso 2 — Sincronizar el proyecto (desde tu Mac)
+
+```bash
+# Desde el root del repo local:
+rsync -avz --progress \
+  --exclude='node_modules' \
+  --exclude='.git' \
+  --exclude='dist' \
+  --exclude='coverage' \
+  --exclude='.env' \
+  --exclude='api/.env' \
+  --exclude='app/.env' \
+  --exclude='.env.production' \
+  --exclude='.env.production.local' \
+  ./ deploy@192.168.1.212:/opt/expense-control/
+
+echo "✓ rsync completado"
+```
+
+> **Nota:** `.env.production` se excluye del rsync para no sobreescribir secretos reales.
+> Se gestiona por separado (ver Paso 3).
+
+### Paso 3 — Crear `.env.production` en el servidor
+
+```bash
+# Copiar el template (si no existe aún)
+scp .env.production deploy@192.168.1.212:/opt/expense-control/.env.production
+
+# Editar en el servidor con valores reales
+ssh deploy@192.168.1.212 "nano /opt/expense-control/.env.production"
+```
+
+**Variables obligatorias:**
 
 | Variable | Valor recomendado |
 |---|---|
-| `POSTGRES_PASSWORD` | Cadena aleatoria >= 20 caracteres |
-| `DATABASE_URL` | Misma contraseña que `POSTGRES_PASSWORD` |
+| `POSTGRES_PASSWORD` | Cadena aleatoria ≥ 20 caracteres |
+| `DATABASE_URL` | `postgresql://postgres:<PASSWORD>@expense-db:5432/expense_control` |
 | `JWT_SECRET` | `openssl rand -hex 64` |
 | `FRONTEND_URL` | `http://192.168.1.212:3000` |
-| `VITE_API_URL` | `http://192.168.1.212:3000/expense-api` |
+| `VITE_API_URL` | `/expense-api` ← **relativa**, funciona desde LAN y ngrok |
+| `VITE_BASE` | `/expense/` |
+| `PORT` | `3000` |
+| `NODE_ENV` | `production` |
 
-Genera el JWT secret:
+> `VITE_API_URL` **debe ser relativa** (`/expense-api`) para que el frontend funcione
+> tanto desde LAN (`http://192.168.1.212:3000`) como desde internet (ngrok HTTPS).
+
+Generar JWT secret:
+
 ```bash
-openssl rand -hex 64
+ssh deploy@192.168.1.212 "openssl rand -hex 64"
 ```
 
----
-
-## Paso 3 — Crear la red Docker `expense_network`
+### Paso 4 — Crear red Docker `expense_network`
 
 ```bash
-ssh deploy "docker network create expense_network 2>/dev/null || echo 'Red ya existe'"
+ssh deploy@192.168.1.212 "docker network create expense_network 2>/dev/null || echo 'ya existe'"
 ```
 
----
+### Paso 5 — Copiar nginx.conf al proyecto 10x-builders
 
-## Paso 4 — Mover open-webui del puerto 3000 al 3002
-
-> open-webui actualmente ocupa el puerto 3000, que necesitamos para el nginx de expense-control.
+El nginx unificado (`context/nginx.conf`) combina las rutas de 10x-builders y expense-control
+en un único server block. Se copia al servidor donde nginx lo lee desde el bind mount.
 
 ```bash
-ssh deploy bash << 'EOF'
-# Obtener el comando original con el que se creó open-webui
-docker inspect open-webui --format '{{.HostConfig.PortBindings}}'
+scp context/nginx.conf deploy@192.168.1.212:/opt/10x-builders/nginx/nginx.conf
+echo "✓ nginx.conf copiado"
+```
 
-# Detener y eliminar el contenedor (datos persisten en su volumen)
-docker stop open-webui && docker rm open-webui
+### Paso 6 — Agregar `expense_network` al docker-compose de 10x-builders
 
-# Recrear en puerto 3002
-docker run -d \
-  --name open-webui \
-  --restart unless-stopped \
-  -p 3002:8080 \
-  -v open-webui:/app/backend/data \
-  ghcr.io/open-webui/open-webui:latest
+```bash
+ssh deploy@192.168.1.212 python3 << 'PYEOF'
+import yaml
 
-echo "open-webui corriendo en :3002"
-docker ps | grep open-webui
+path = '/opt/10x-builders/docker-compose.yml'
+with open(path) as f:
+    cfg = yaml.safe_load(f)
+
+nginx_nets = cfg['services']['nginx']['networks']
+if 'expense_network' not in nginx_nets:
+    nginx_nets.append('expense_network')
+
+cfg.setdefault('networks', {})['expense_network'] = {
+    'external': True,
+    'name': 'expense_network'
+}
+
+with open(path, 'w') as f:
+    yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+
+print("✓ docker-compose.yml actualizado")
+PYEOF
+```
+
+### Paso 7 — Levantar nginx (10x-builders)
+
+```bash
+ssh deploy@192.168.1.212 bash << 'EOF'
+cd /opt/10x-builders
+docker-compose up -d nginx
+sleep 2
+
+docker exec 10x-builders-nginx nginx -t && echo "✓ nginx config OK"
+
+echo "redes de nginx:"
+docker inspect 10x-builders-nginx \
+  --format '{{range $k,$v := .NetworkSettings.Networks}}  {{$k}}{{"\n"}}{{end}}'
 EOF
 ```
 
-> Si open-webui tiene variables de entorno adicionales (OPENAI_API_KEY, etc.) agrégalas al comando `docker run` con `-e VAR=valor`.
+> Debe mostrar `10x-builders_internal` y `expense_network`.
 
----
-
-## Paso 5 — Agregar el puerto 3000 al contenedor nginx existente
-
-El contenedor `10x-builders-nginx` actualmente solo expone el puerto 80. Necesitamos añadirle el 3000.
-
-> No es posible agregar puertos a un contenedor en ejecución sin recrearlo.
-> Necesitas conocer cómo se levanta el contenedor `10x-builders-nginx` (compose file o comando run).
-
-### Opción A — Si el nginx corre con docker-compose del proyecto 10x-builders:
+### Paso 8 — Levantar expense-control (BD + API + App)
 
 ```bash
-# En el proyecto 10x-builders, edita el docker-compose.yml del nginx:
-# Agrega:  - "3000:3000"  en la sección ports
-
-ssh deploy "cd ~/10x-builders && nano docker-compose.yml"
-
-# Recrear solo el contenedor nginx (sin detener los demás)
-ssh deploy "cd ~/10x-builders && docker compose up -d --no-deps nginx"
-```
-
-### Opción B — Si el nginx corre con `docker run`:
-
-```bash
-ssh deploy bash << 'EOF'
-# Detener nginx actual
-docker stop 10x-builders-nginx && docker rm 10x-builders-nginx
-
-# Recrear con puerto adicional 3000
-docker run -d \
-  --name 10x-builders-nginx \
-  --restart unless-stopped \
-  -p 80:80 \
-  -p 3000:3000 \
-  -v /ruta/a/nginx.conf:/etc/nginx/nginx.conf:ro \
-  -v /ruta/a/conf.d:/etc/nginx/conf.d:ro \
-  nginx:1.27-alpine
-
-echo "nginx expone :80 y :3000"
-docker ps | grep nginx
-EOF
-```
-
----
-
-## Paso 6 — Conectar nginx y 10x-builders-web a expense_network
-
-```bash
-ssh deploy bash << 'EOF'
-docker network connect expense_network 10x-builders-nginx
-docker network connect expense_network 10x-builders-web
-echo "Contenedores conectados a expense_network:"
-docker network inspect expense_network --format '{{range .Containers}}  {{.Name}}{{"\n"}}{{end}}'
-EOF
-```
-
----
-
-## Paso 7 — Copiar la configuración nginx de expense-control al servidor
-
-```bash
-# Desde tu máquina local
-scp nginx/expense-control.conf deploy:/tmp/expense-control.conf
-
-# En el servidor: copiar el .conf al directorio que nginx puede incluir
-ssh deploy bash << 'EOF'
-# Crear el directorio conf.d dentro del contenedor (si no existe)
-docker exec 10x-builders-nginx mkdir -p /etc/nginx/conf.d
-
-# Copiar el archivo de configuración al contenedor
-docker cp /tmp/expense-control.conf 10x-builders-nginx:/etc/nginx/conf.d/expense-control.conf
-
-echo "Contenido de /etc/nginx/conf.d:"
-docker exec 10x-builders-nginx ls -la /etc/nginx/conf.d/
-EOF
-```
-
----
-
-## Paso 8 — Agregar `include` al nginx.conf del servidor (una sola línea)
-
-Este es el ÚNICO cambio al `nginx.conf` existente. Se agrega una línea `include` al final del bloque `http {}`, antes del cierre `}`.
-
-```bash
-ssh deploy bash << 'EOF'
-# Verificar que la línea include no existe ya
-docker exec 10x-builders-nginx grep -q "conf.d/\*.conf" /etc/nginx/nginx.conf \
-  && echo "include ya existe, no se hace nada" \
-  || {
-    # Agregar include antes del último } del archivo (cierre de http {})
-    docker exec 10x-builders-nginx sh -c \
-      "sed -i 's|}$|    include /etc/nginx/conf.d/*.conf;\n}|' /etc/nginx/nginx.conf"
-    echo "Línea include agregada correctamente"
-  }
-
-# Verificar la sintaxis del nginx.conf completo
-docker exec 10x-builders-nginx nginx -t
-EOF
-```
-
-> Si el `nginx -t` falla, revisa el archivo con:
-> ```bash
-> docker exec 10x-builders-nginx cat /etc/nginx/nginx.conf
-> ```
-
----
-
-## Paso 9 — Levantar los servicios de Expense Control
-
-### Opción A — Stack completo (BD + API + App) — primera vez o si no tienes BD previa:
-
-```bash
-ssh deploy bash << 'EOF'
-cd ~/expense-control
-VITE_API_URL=http://192.168.1.212:3000/expense-api \
-  docker compose up -d --build
-echo "Servicios levantados:"
+ssh deploy@192.168.1.212 bash << 'EOF'
+cd /opt/expense-control
+docker-compose up -d --build
+echo "✓ expense-control levantado"
 docker ps | grep expense
 EOF
 ```
 
-### Opción B — Solo API + App (BD ya está corriendo):
+### Paso 9 — Verificación completa
 
 ```bash
-ssh deploy bash << 'EOF'
-cd ~/expense-control
-
-# Asegurarse de que la BD ya está en expense_network
-docker network connect expense_network expense_control_db 2>/dev/null || true
-
-VITE_API_URL=http://192.168.1.212:3000/expense-api \
-  docker compose -f docker-compose.app.yml up -d --build
-echo "API y App levantadas:"
-docker ps | grep expense
-EOF
-```
-
-### Opción C — Solo BD:
-
-```bash
-ssh deploy bash << 'EOF'
-cd ~/expense-control
-docker compose -f db/docker-compose.yml up -d
-docker ps | grep expense_control_db
-EOF
-```
-
----
-
-## Paso 10 — Recargar nginx
-
-```bash
-ssh deploy bash << 'EOF'
-# Test sintaxis antes de recargar
-docker exec 10x-builders-nginx nginx -t && \
-  docker exec 10x-builders-nginx nginx -s reload && \
-  echo "nginx recargado correctamente"
-EOF
-```
-
----
-
-## Paso 11 — Verificación
-
-```bash
-ssh deploy bash << 'EOF'
-echo "=== Contenedores corriendo ==="
+ssh deploy@192.168.1.212 bash << 'EOF'
+echo "=== CONTENEDORES ==="
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
 echo ""
-echo "=== Redes ==="
-docker network inspect expense_network --format '{{range .Containers}}  {{.Name}}{{"\n"}}{{end}}'
+echo "=== TEST RUTAS (puerto 3000) ==="
+sleep 8
+echo -n "/expense/           → " && curl -so /dev/null -w "%{http_code}\n" http://localhost:3000/expense/
+echo -n "/expense-api/health → " && curl -s http://localhost:3000/expense-api/health
+echo ""
+echo -n "/agent              → " && curl -so /dev/null -w "%{http_code}\n" http://localhost:3000/agent
 
 echo ""
-echo "=== Test endpoints ==="
-# Frontend React
-curl -sI http://localhost:3000/expense/ | head -5
-
-# API (debe responder aunque sea 401/404 — prueba que NestJS responde)
-curl -sI http://localhost:3000/expense-api/ | head -5
-
-echo ""
-echo "=== Logs API (últimas 20 líneas) ==="
-docker logs expense_control_api --tail 20
+echo "=== NGROK URL ==="
+curl -s http://localhost:4040/api/tunnels | \
+  python3 -c "import json,sys; t=json.load(sys.stdin)['tunnels']; print(t[0]['public_url'] if t else 'sin túnel')"
 EOF
 ```
 
-Desde tu máquina local:
-```bash
-# Frontend
-curl -sI http://192.168.1.212:3000/expense/
-
-# API
-curl -sI http://192.168.1.212:3000/expense-api/
-
-# open-webui (nueva ubicación)
-curl -sI http://192.168.1.212:3002/
+**Resultado esperado:**
 ```
+/expense/           → 200
+/expense-api/health → {"status":"ok"}
+/agent              → 200 o 307 (redirect Next.js — normal)
+```
+
+---
+
+## Actualizar el despliegue (flujo normal)
+
+### Actualización de código (sin cambios de BD)
+
+```bash
+# 1. Sincronizar archivos modificados
+rsync -avz --progress \
+  --exclude='node_modules' --exclude='.git' --exclude='dist' \
+  --exclude='coverage' --exclude='.env' --exclude='api/.env' \
+  --exclude='app/.env' --exclude='.env.production' \
+  --exclude='.env.production.local' \
+  ./ deploy@192.168.1.212:/opt/expense-control/
+
+# 2. Rebuild y restart en el servidor
+ssh deploy@192.168.1.212 bash << 'EOF'
+cd /opt/expense-control
+docker-compose up -d --build expense-api expense-app
+EOF
+```
+
+### Actualizar solo el nginx (cambios en context/nginx.conf)
+
+```bash
+scp context/nginx.conf deploy@192.168.1.212:/opt/10x-builders/nginx/nginx.conf
+
+ssh deploy@192.168.1.212 bash << 'EOF'
+docker exec 10x-builders-nginx nginx -t && \
+  docker exec 10x-builders-nginx nginx -s reload && \
+  echo "✓ nginx recargado"
+EOF
+```
+
+> **Nota sobre inodes:** `scp` crea un nuevo inode. Si nginx no ve los cambios tras reload,
+> usar `docker restart 10x-builders-nginx` para forzar la re-lectura del bind mount.
 
 ---
 
 ## Comandos útiles post-despliegue
 
 ```bash
-# Ver logs de todos los servicios
-ssh deploy "cd ~/expense-control && docker compose logs -f"
+# Ver todos los contenedores
+ssh deploy@192.168.1.212 "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
 
-# Ver logs solo del API
-ssh deploy "docker logs expense_control_api -f"
+# Logs del API
+ssh deploy@192.168.1.212 "docker logs expense_control_api -f --tail 50"
+
+# Logs del nginx
+ssh deploy@192.168.1.212 "docker logs 10x-builders-nginx -f --tail 50"
 
 # Reiniciar solo el API (sin rebuild)
-ssh deploy "docker restart expense_control_api"
+ssh deploy@192.168.1.212 "docker restart expense_control_api"
 
-# Actualizar y redesplegar (rebuild completo)
-ssh deploy bash << 'EOF'
-cd ~/expense-control
-git pull origin trunk
-VITE_API_URL=http://192.168.1.212:3000/expense-api \
-  docker compose up -d --build
+# Acceder a la BD
+ssh deploy@192.168.1.212 "docker exec -it expense_control_db psql -U postgres -d expense_control"
+
+# Reset completo de la BD (⚠️ borra todos los datos)
+ssh deploy@192.168.1.212 bash << 'EOF'
+cd /opt/expense-control
+docker-compose -f db/docker-compose.yml down -v
+docker-compose -f db/docker-compose.yml up -d
 EOF
 
-# Reset completo de la BD (¡BORRA TODOS LOS DATOS!)
-ssh deploy bash << 'EOF'
-cd ~/expense-control
-docker compose -f db/docker-compose.yml down -v
-docker compose -f db/docker-compose.yml up -d
-EOF
+# Limpiar contenedores e imágenes sin usar
+ssh deploy@192.168.1.212 "docker system prune -f"
 
-# Acceder a la BD directamente
-ssh deploy "docker exec -it expense_control_db psql -U postgres -d expense_control"
+# Ver URL ngrok activa
+ssh deploy@192.168.1.212 "curl -s http://localhost:4040/api/tunnels | python3 -c \"import json,sys; t=json.load(sys.stdin)['tunnels']; print(t[0]['public_url'] if t else 'sin túnel')\""
 ```
 
 ---
 
-## Estructura de archivos del proyecto (referencia)
+## Troubleshooting
+
+### nginx no enruta a expense (502 Bad Gateway)
+
+```bash
+# Verificar que nginx está en expense_network
+ssh deploy@192.168.1.212 "docker inspect 10x-builders-nginx \
+  --format '{{range \$k,\$v := .NetworkSettings.Networks}}{{\$k}} {{end}}'"
+# Debe mostrar: 10x-builders_internal expense_network
+
+# Si falta expense_network, conectar manualmente:
+ssh deploy@192.168.1.212 "docker network connect expense_network 10x-builders-nginx && \
+  docker exec 10x-builders-nginx nginx -s reload"
+```
+
+### API unhealthy
+
+```bash
+ssh deploy@192.168.1.212 bash << 'EOF'
+docker logs expense_control_api --tail 30
+# Probar healthcheck manualmente:
+docker exec expense_control_api wget -qO- http://localhost:3000/health
+EOF
+```
+
+### Frontend no puede conectar al API (desde ngrok)
+
+Verificar que `VITE_API_URL` es relativa en `.env.production`:
+```bash
+ssh deploy@192.168.1.212 "grep VITE_API_URL /opt/expense-control/.env.production"
+# Debe mostrar: VITE_API_URL=/expense-api
+```
+Si no, corregir y rebuild:
+```bash
+ssh deploy@192.168.1.212 "sed -i 's|VITE_API_URL=.*|VITE_API_URL=/expense-api|' \
+  /opt/expense-control/.env.production"
+ssh deploy@192.168.1.212 "cd /opt/expense-control && docker-compose up -d --build expense-app"
+```
+
+### nginx no ve el nginx.conf actualizado tras scp
+
+```bash
+# scp crea un nuevo inode; forzar re-lectura reiniciando el contenedor:
+ssh deploy@192.168.1.212 "docker restart 10x-builders-nginx"
+```
+
+### ngrok no expone las rutas de expense
+
+Verificar que ngrok está configurado con `nginx:80`:
+```bash
+ssh deploy@192.168.1.212 "docker inspect 10x-builders-ngrok --format '{{json .Config.Cmd}}'"
+# Debe mostrar: ["http","nginx:80","--log=stdout"]
+```
+
+---
+
+## Archivos clave del proyecto
 
 ```
 expense-control-assistant/
 ├── api/
-│   ├── Dockerfile              ← Multi-stage NestJS build
-│   └── src/
+│   ├── Dockerfile              ← multi-stage NestJS build (node:22-alpine)
+│   └── src/app.controller.ts   ← GET /health incluido
 ├── app/
-│   ├── Dockerfile              ← Multi-stage React + nginx:alpine
-│   ├── nginx-static.conf       ← Config nginx para servir la SPA
-│   └── vite.config.ts          ← base: '/expense/' en producción
+│   ├── Dockerfile              ← multi-stage React + nginx:alpine
+│   ├── nginx-static.conf       ← serve SPA con try_files
+│   └── src/lib/apiClient.ts    ← usa VITE_API_URL (debe ser relativa en PRD)
 ├── db/
-│   ├── docker-compose.yml      ← Solo PostgreSQL (standalone)
-│   └── init.sql
+│   ├── docker-compose.yml      ← PostgreSQL standalone
+│   └── init.sql                ← schema inicial
+├── context/
+│   └── nginx.conf              ← nginx unificado (10x-builders + expense)
+│                                  → se copia a /opt/10x-builders/nginx/nginx.conf
 ├── nginx/
-│   └── expense-control.conf    ← Include nginx: upstreams + server :3000
-├── docker-compose.yml          ← Stack completo (DB + API + App)
-├── docker-compose.app.yml      ← Solo API + App (BD externa)
-├── .env.production             ← Template de variables (no commitear con secretos)
-└── despliegue-prd.md           ← Este documento
+│   └── expense-control.conf    ← referencia histórica (ya no se usa como include)
+├── docker-compose.yml          ← stack completo: DB + API + App
+├── docker-compose.app.yml      ← solo API + App (BD externa)
+├── .env.production             ← template sin secretos (commiteable)
+└── despliegue-prd.md           ← este documento
 ```
 
 ---
 
-## Mejores prácticas de modularización recomendadas
+## Notas de arquitectura
 
-### A — Include pattern nginx (ya implementado)
-Cada servicio aporta su propio `.conf` en `/etc/nginx/conf.d/`. El `nginx.conf` global solo tiene `include /etc/nginx/conf.d/*.conf;`. Para agregar un nuevo servicio: copiar un archivo `.conf`, hacer `nginx -s reload`.
+### Por qué un nginx unificado
 
-### B — Docker Compose profiles
-Permite levantar subconjuntos del stack con un flag:
-```bash
-docker compose --profile db up -d      # Solo BD
-docker compose --profile app up -d     # Solo App + API
-docker compose up -d                   # Todo
-```
+El archivo `context/nginx.conf` reemplaza al patrón anterior de dos server blocks separados
+(`:80` para 10x-builders y `:3000` para expense). El server block unificado escucha en
+`listen 80; listen 3000;`, lo que permite:
 
-### C — Makefile de despliegue
-Un `Makefile` en el repo para estandarizar los comandos frecuentes:
-```makefile
-deploy:
-	ssh deploy "cd ~/expense-control && git pull && docker compose up -d --build"
+- **ngrok → nginx:80**: todas las rutas expuestas por el mismo túnel
+- **LAN → nginx:3000**: acceso directo desde la red local (host port mapping)
+- Un único lugar para mantener rate limits, CSP y timeouts
 
-restart-api:
-	ssh deploy "docker restart expense_control_api"
+### Por qué VITE_API_URL debe ser relativa
 
-logs:
-	ssh deploy "docker compose -f ~/expense-control/docker-compose.yml logs -f"
+`VITE_API_URL` se hornea en el bundle de React en tiempo de build. Si es una URL absoluta
+(`http://192.168.1.212:3000/expense-api`), el browser la usa incluso cuando accede via
+ngrok HTTPS, causando errores de contenido mixto (HTTP desde página HTTPS) e inaccesibilidad
+desde fuera de la LAN.
 
-db-reset:
-	ssh deploy "cd ~/expense-control && docker compose -f db/docker-compose.yml down -v && docker compose -f db/docker-compose.yml up -d"
-```
-
-### D — Imagen pre-buildeada con tag de commit
-Buildear localmente y pushear antes de hacer SSH (evita instalar build tools en el servidor):
-```bash
-# Local: buildear y taggear con el commit
-API_TAG=$(git rev-parse --short HEAD)
-docker build -t expense-control/api:$API_TAG ./api
-docker build --build-arg VITE_API_URL=http://192.168.1.212:3000/expense-api \
-             --build-arg VITE_BASE=/expense/ \
-             -t expense-control/app:$API_TAG ./app
-
-# Pushear a registry (ejemplo: ghcr.io)
-docker push ghcr.io/<usuario>/expense-control-api:$API_TAG
-docker push ghcr.io/<usuario>/expense-control-app:$API_TAG
-
-# En el servidor, solo hacer pull y restart
-ssh deploy "docker pull ghcr.io/<usuario>/expense-control-api:$API_TAG && docker restart expense_control_api"
-```
+Con `VITE_API_URL=/expense-api` (relativa), el browser construye la URL usando el origen
+actual: LAN usa `http://192.168.1.212:3000/expense-api`, ngrok usa la URL del túnel.

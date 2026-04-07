@@ -31,4 +31,4 @@ volumes:
 networks:
   expense_network:
     name: expense_network
-    driver: bridge
+    external: true
