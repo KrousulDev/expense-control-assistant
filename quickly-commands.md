@@ -1,5 +1,10 @@
 # Comandos de Diagnóstico Rápido — Expense Control
 
+> Para despliegue completo usar: `./scripts/setup-server.sh`
+> Ver opciones con: `./scripts/setup-server.sh --help`
+
+
+
 Referencia de comandos para diagnosticar el estado del sistema en producción.
 Servidor: `deploy@192.168.1.212`
 
